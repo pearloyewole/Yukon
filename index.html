@@ -3,11 +3,38 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Yukon — three.js visualizations</title>
+    <title>Yukon River 3D Viewer</title>
     <link rel="stylesheet" href="/src/style.css" />
   </head>
   <body>
-    <!-- three.js scene mounts to body by default in the example -->
+    <div id="app">
+      <aside class="sidebar">
+        <h1>Yukon Explorer</h1>
+        <p class="subtitle">Upload shapefile (.shp) for river, cross-section (.mat) files, and overview sheet (.xlsx)</p>
+
+        <section class="card">
+          <div><strong>River:</strong> <span id="riverName">loading...</span></div>
+          <p id="counts" class="meta"></p>
+          <p id="statusText" class="meta">Starting...</p>
+        </section>
+
+        <section class="card">
+          <label for="packageFile">Load another generated river package JSON</label>
+          <input id="packageFile" type="file" accept="application/json" />
+          <button id="resetView" type="button">Reset camera</button>
+        </section>
+
+        <section class="card">
+          <h3>Cross-section details</h3>
+          <div id="crossSectionDetails">
+            <p>Click a cross-section marker in the 3D view.</p>
+          </div>
+        </section>
+      </aside>
+
+      <main id="scene"></main>
+    </div>
+
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>

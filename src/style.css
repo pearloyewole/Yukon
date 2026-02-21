@@ -1,10 +1,134 @@
-html, body {
+:root {
+  --bg: #071019;
+  --panel: rgba(10, 18, 28, 0.9);
+  --line: rgba(180, 206, 230, 0.2);
+  --text: #d8e7f8;
+  --muted: #8ea2b8;
+  --accent: #f6c15e;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
   width: 100%;
   height: 100%;
-  margin: 0;
-  padding: 0;
   overflow: hidden;
-  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial;
-  background: #0b0b0b;
+  background: radial-gradient(circle at 20% 20%, #0d1b2d 0%, var(--bg) 55%, #04080f 100%);
+  color: var(--text);
+  font-family: 'IBM Plex Sans', 'Segoe UI', system-ui, sans-serif;
 }
-canvas { display: block; }
+
+#app {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  grid-template-columns: 360px 1fr;
+}
+
+.sidebar {
+  border-right: 1px solid var(--line);
+  background: linear-gradient(180deg, rgba(7, 14, 23, 0.95), rgba(5, 10, 16, 0.95));
+  padding: 18px;
+  overflow: auto;
+}
+
+h1 {
+  margin: 0 0 8px;
+  font-size: 1.2rem;
+  font-weight: 700;
+}
+
+.subtitle {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+.card {
+  margin-top: 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px;
+  background: var(--panel);
+}
+
+.meta {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+label {
+  font-size: 0.86rem;
+  color: var(--muted);
+}
+
+input[type='file'] {
+  margin-top: 8px;
+  width: 100%;
+}
+
+button {
+  width: 100%;
+  margin-top: 10px;
+  border: 1px solid rgba(247, 193, 94, 0.4);
+  color: #fce2ad;
+  background: rgba(53, 40, 14, 0.35);
+  border-radius: 8px;
+  padding: 9px 10px;
+  cursor: pointer;
+}
+
+button:hover {
+  background: rgba(80, 58, 17, 0.42);
+}
+
+#statusText {
+  color: #9ec6f0;
+  font-size: 0.85rem;
+}
+
+#crossSectionDetails {
+  display: grid;
+  gap: 7px;
+}
+
+.detail-row {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 2px;
+  padding-bottom: 6px;
+  border-bottom: 1px dashed rgba(146, 169, 194, 0.18);
+}
+
+.detail-row span {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.detail-row strong {
+  color: var(--text);
+  font-size: 0.92rem;
+  font-weight: 600;
+}
+
+#scene {
+  width: 100%;
+  height: 100%;
+}
+
+@media (max-width: 980px) {
+  #app {
+    grid-template-columns: 1fr;
+    grid-template-rows: 42vh 58vh;
+  }
+
+  .sidebar {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+}
