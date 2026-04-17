@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>[YUKON] Logged Analyses</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="loggedAnalysesApp" class="logged-page onboarding-root">
+      <div class="onboarding-grid"></div>
+
+      <main class="logged-shell">
+        <header class="logged-header shell-panel">
+          <div>
+            <h1>Logged Analyses</h1>
+            <p>Select an analysis to launch the river JSON in the analysis environment.</p>
+          </div>
+          <div class="logged-header-actions">
+            <button id="loggedBackHome" type="button" class="inline-btn">Home</button>
+            <button id="loggedNewAnalysis" type="button" class="inline-btn">New Analysis</button>
+          </div>
+        </header>
+
+        <section id="loggedAnalysesGrid" class="logged-grid" aria-live="polite"></section>
+      </main>
+    </div>
+
+    <script type="module" src="/src/logged-analyses.js"></script>
+  </body>
+</html>

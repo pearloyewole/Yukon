@@ -9,12 +9,16 @@ Supports two modes:
 from __future__ import annotations
 
 import argparse
+import csv
 import datetime as dt
 import glob
+import io
 import json
 import math
+import random
 import tempfile
 import zipfile
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -64,6 +68,36 @@ def parse_args() -> argparse.Namespace:
         default=24,
         help="Downsampled square size for velocity preview data",
     )
+    parser.add_argument(
+        "--sonar-zip",
+        action="append",
+        default=[],
+        help=(
+            "Path to a zip containing sonar bottom CSV files "
+            "(repeat flag to provide multiple zips)"
+        ),
+    )
+    parser.add_argument(
+        "--sonar-csv-glob",
+        action="append",
+        default=[],
+        help=(
+            "Glob pattern for sonar bottom CSV files in explicit mode "
+            "(repeat flag for multiple patterns)"
+        ),
+    )
+    parser.add_argument(
+        "--sonar-max-points",
+        type=int,
+        default=120000,
+        help="Max number of sonar bottom points to store in package JSON",
+    )
+    parser.add_argument(
+        "--sonar-min-depth-m",
+        type=float,
+        default=0.0,
+        help="Minimum sonar depth (meters) to include",
+    )
     return parser.parse_args()
 
 
@@ -72,8 +106,10 @@ def find_first(root: Path, pattern: str) -> Path | None:
     return matches[0] if matches else None
 
 
-def resolve_inputs(args: argparse.Namespace) -> tuple[Path, Path, Path, Path, list[Path], dict[str, str]]:
-    source: dict[str, str] = {}
+def resolve_inputs(
+    args: argparse.Namespace,
+) -> tuple[Path, Path, Path, Path, list[Path], dict[str, Any], Path | None]:
+    source: dict[str, Any] = {}
 
     if args.input_zip:
         input_zip = Path(args.input_zip).expanduser().resolve()
@@ -101,7 +137,7 @@ def resolve_inputs(args: argparse.Namespace) -> tuple[Path, Path, Path, Path, li
                 "extracted_dir": str(temp_dir),
             }
         )
-        return shp, dbf, shx, overview, mat_files, source
+        return shp, dbf, shx, overview, mat_files, source, temp_dir
 
     if not args.shp or not args.overview:
         raise SystemExit("Provide --input-zip OR explicit --shp and --overview inputs")
@@ -131,7 +167,43 @@ def resolve_inputs(args: argparse.Namespace) -> tuple[Path, Path, Path, Path, li
             "mat_glob": args.mat_glob,
         }
     )
-    return shp, dbf, shx, overview, mat_files, source
+    return shp, dbf, shx, overview, mat_files, source, None
+
+
+def resolve_sonar_inputs(
+    args: argparse.Namespace,
+    extracted_dir: Path | None,
+    source: dict[str, Any],
+) -> tuple[list[Path], list[Path]]:
+    sonar_zip_paths: list[Path] = []
+    sonar_csv_paths: list[Path] = []
+
+    for zip_path_str in args.sonar_zip:
+        zip_path = Path(zip_path_str).expanduser().resolve()
+        if not zip_path.exists():
+            raise SystemExit(f"Sonar zip not found: {zip_path}")
+        sonar_zip_paths.append(zip_path)
+
+    for pattern in args.sonar_csv_glob:
+        matches = [Path(p).resolve() for p in sorted(glob.glob(pattern))]
+        sonar_csv_paths.extend(matches)
+
+    if extracted_dir is not None:
+        # When the main dataset arrives as a zip, auto-scan any CSV files inside.
+        sonar_csv_paths.extend(sorted(extracted_dir.rglob("*.csv")))
+
+    # Preserve order while de-duplicating.
+    unique_zip_paths = list(dict.fromkeys(sonar_zip_paths))
+    unique_csv_paths = list(dict.fromkeys(sonar_csv_paths))
+
+    if unique_zip_paths:
+        source["sonar_zip"] = [str(p) for p in unique_zip_paths]
+    if args.sonar_csv_glob:
+        source["sonar_csv_glob"] = args.sonar_csv_glob
+    if extracted_dir is not None:
+        source["input_zip_csv_candidates"] = len(unique_csv_paths)
+
+    return unique_zip_paths, unique_csv_paths
 
 
 def to_json_value(value: Any) -> Any:
@@ -149,6 +221,369 @@ def to_json_value(value: Any) -> Any:
 
 def normalize_header(name: str) -> str:
     return "".join(ch.lower() if ch.isalnum() else "_" for ch in name).strip("_")
+
+
+def to_float(value: Any) -> float | None:
+    try:
+        num = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(num):
+        return None
+    return num
+
+
+def normalize_latitude(value: Any) -> float | None:
+    lat = to_float(value)
+    if lat is None:
+        return None
+
+    while abs(lat) > 90 and abs(lat) > 1:
+        lat /= 10.0
+
+    if abs(lat) > 90:
+        return None
+    return lat
+
+
+def normalize_longitude(value: Any, reference_longitude: float | None) -> float | None:
+    lon = to_float(value)
+    if lon is None:
+        return None
+
+    while abs(lon) > 180 and abs(lon) > 1:
+        lon /= 10.0
+
+    if abs(lon) > 180:
+        return None
+
+    # Fix occasional sign flips (e.g., +156 instead of -156) by matching
+    # the dominant hemisphere seen in the overview table.
+    if reference_longitude is not None and abs(lon) > 90:
+        if reference_longitude < 0 and lon > 0:
+            lon = -lon
+        elif reference_longitude > 0 and lon < 0:
+            lon = -lon
+
+    return lon
+
+
+def overview_longitude_reference(overview_rows: list[dict[str, Any]]) -> float | None:
+    raw_longitudes: list[float] = []
+    for row in overview_rows:
+        for key in ("start_longitude", "end_longitude"):
+            lon = to_float(row.get(key))
+            if lon is None:
+                continue
+            if abs(lon) <= 180:
+                raw_longitudes.append(lon)
+
+    if not raw_longitudes:
+        return None
+    return float(np.median(raw_longitudes))
+
+
+def build_lonlat_to_xy_transform(overview_rows: list[dict[str, Any]]) -> dict[str, Any] | None:
+    control_points: list[tuple[float, float, float, float]] = []
+    reference_longitude = overview_longitude_reference(overview_rows)
+
+    for row in overview_rows:
+        candidates = [
+            (
+                row.get("start_longitude"),
+                row.get("start_latitude"),
+                row.get("cross_section_start_x__utm"),
+                row.get("cross_section_start_y__utm"),
+            ),
+            (
+                row.get("end_longitude"),
+                row.get("end_latitude"),
+                row.get("cross_section_end_x__utm"),
+                row.get("cross_section_end_y__utm"),
+            ),
+        ]
+
+        for lon_val, lat_val, x_val, y_val in candidates:
+            lon = normalize_longitude(lon_val, reference_longitude)
+            lat = normalize_latitude(lat_val)
+            x = to_float(x_val)
+            y = to_float(y_val)
+            if None in (lon, lat, x, y):
+                continue
+
+            if not (0 <= x <= 1_000_000 and 0 <= y <= 10_000_000):
+                continue
+
+            control_points.append((lon, lat, x, y))
+
+    if len(control_points) < 3:
+        return None
+
+    ll = np.array([[lon, lat, 1.0] for lon, lat, _, _ in control_points], dtype=float)
+    xs = np.array([x for _, _, x, _ in control_points], dtype=float)
+    ys = np.array([y for _, _, _, y in control_points], dtype=float)
+
+    x_coeff, _, _, _ = np.linalg.lstsq(ll, xs, rcond=None)
+    y_coeff, _, _, _ = np.linalg.lstsq(ll, ys, rcond=None)
+
+    pred_x = ll @ x_coeff
+    pred_y = ll @ y_coeff
+    rmse_x = float(np.sqrt(np.mean((pred_x - xs) ** 2)))
+    rmse_y = float(np.sqrt(np.mean((pred_y - ys) ** 2)))
+
+    return {
+        "type": "affine_lonlat_to_xy",
+        "control_points": len(control_points),
+        "coefficients": {
+            "x": [float(v) for v in x_coeff],
+            "y": [float(v) for v in y_coeff],
+        },
+        "fit_rmse_m": {
+            "x": rmse_x,
+            "y": rmse_y,
+        },
+        "reference_longitude": reference_longitude,
+    }
+
+
+def transform_lonlat_to_xy(transform: dict[str, Any], lon: float, lat: float) -> tuple[float, float]:
+    x_coeff = transform["coefficients"]["x"]
+    y_coeff = transform["coefficients"]["y"]
+    x = x_coeff[0] * lon + x_coeff[1] * lat + x_coeff[2]
+    y = y_coeff[0] * lon + y_coeff[1] * lat + y_coeff[2]
+    return float(x), float(y)
+
+
+def match_sonar_columns(fieldnames: list[str]) -> tuple[str, str, str] | None:
+    normalized = {normalize_header(name): name for name in fieldnames if name is not None}
+
+    lat_col = None
+    lon_col = None
+    depth_col = None
+
+    for key in ("latitude", "lat"):
+        if key in normalized:
+            lat_col = normalized[key]
+            break
+
+    for key in ("longitude", "long", "lon"):
+        if key in normalized:
+            lon_col = normalized[key]
+            break
+
+    for key in ("depth_m", "depth__m", "depth"):
+        if key in normalized:
+            depth_col = normalized[key]
+            break
+
+    if depth_col is None:
+        for norm_name, raw_name in normalized.items():
+            if norm_name.startswith("depth"):
+                depth_col = raw_name
+                break
+
+    if not lat_col or not lon_col or not depth_col:
+        return None
+    return lat_col, lon_col, depth_col
+
+
+def summarize_sonar_csv_stream(
+    stream: io.TextIOBase,
+    label: str,
+    *,
+    transform: dict[str, Any],
+    min_depth_m: float,
+    max_points: int,
+    rng: random.Random,
+    reservoir: list[tuple[float, float, float, int]],
+    global_state: dict[str, Any],
+    file_index: int,
+) -> dict[str, Any]:
+    reader = csv.DictReader(stream)
+    if not reader.fieldnames:
+        return {"name": label, "rows": 0, "valid_points": 0, "skipped": "missing_header"}
+
+    col_match = match_sonar_columns(reader.fieldnames)
+    if col_match is None:
+        return {
+            "name": label,
+            "rows": 0,
+            "valid_points": 0,
+            "skipped": "missing_lat_lon_depth_columns",
+        }
+
+    lat_col, lon_col, depth_col = col_match
+    ref_lon = to_float(transform.get("reference_longitude"))
+
+    rows = 0
+    valid_points = 0
+    depth_min = math.inf
+    depth_max = -math.inf
+    depth_sum = 0.0
+
+    for row in reader:
+        rows += 1
+
+        lat = normalize_latitude(row.get(lat_col))
+        lon = normalize_longitude(row.get(lon_col), ref_lon)
+        depth = to_float(row.get(depth_col))
+        if None in (lat, lon, depth):
+            continue
+        if depth < min_depth_m:
+            continue
+
+        x, y = transform_lonlat_to_xy(transform, lon, lat)
+
+        valid_points += 1
+        global_state["valid_points"] += 1
+        global_state["depth_sum"] += depth
+        global_state["depth_min"] = min(global_state["depth_min"], depth)
+        global_state["depth_max"] = max(global_state["depth_max"], depth)
+        global_state["min_x"] = min(global_state["min_x"], x)
+        global_state["max_x"] = max(global_state["max_x"], x)
+        global_state["min_y"] = min(global_state["min_y"], y)
+        global_state["max_y"] = max(global_state["max_y"], y)
+
+        depth_min = min(depth_min, depth)
+        depth_max = max(depth_max, depth)
+        depth_sum += depth
+
+        if max_points <= 0:
+            continue
+
+        point = (x, y, depth, file_index)
+        if len(reservoir) < max_points:
+            reservoir.append(point)
+        else:
+            j = rng.randrange(global_state["valid_points"])
+            if j < max_points:
+                reservoir[j] = point
+
+    return {
+        "index": file_index,
+        "name": label,
+        "rows": rows,
+        "valid_points": valid_points,
+        "depth_m": {
+            "min": depth_min if valid_points else None,
+            "max": depth_max if valid_points else None,
+            "mean": (depth_sum / valid_points) if valid_points else None,
+        },
+    }
+
+
+def load_sonar_bottom_data(
+    *,
+    overview_rows: list[dict[str, Any]],
+    sonar_zip_paths: list[Path],
+    sonar_csv_paths: list[Path],
+    max_points: int,
+    min_depth_m: float,
+) -> dict[str, Any] | None:
+    if not sonar_zip_paths and not sonar_csv_paths:
+        return None
+
+    transform = build_lonlat_to_xy_transform(overview_rows)
+    if transform is None:
+        raise SystemExit(
+            "Unable to derive lon/lat -> river XY transform from overview workbook. "
+            "Need at least 3 records with both lat/lon and UTM start/end coordinates."
+        )
+
+    rng = random.Random(0)
+    reservoir: list[tuple[float, float, float, int]] = []
+    global_state = {
+        "valid_points": 0,
+        "depth_sum": 0.0,
+        "depth_min": math.inf,
+        "depth_max": -math.inf,
+        "min_x": math.inf,
+        "max_x": -math.inf,
+        "min_y": math.inf,
+        "max_y": -math.inf,
+    }
+
+    file_summaries: list[dict[str, Any]] = []
+    file_index = 0
+
+    for csv_path in sonar_csv_paths:
+        if not csv_path.exists():
+            continue
+        with csv_path.open("r", encoding="utf-8-sig", errors="replace", newline="") as stream:
+            file_summaries.append(
+                summarize_sonar_csv_stream(
+                    stream,
+                    str(csv_path),
+                    transform=transform,
+                    min_depth_m=min_depth_m,
+                    max_points=max_points,
+                    rng=rng,
+                    reservoir=reservoir,
+                    global_state=global_state,
+                    file_index=file_index,
+                )
+            )
+        file_index += 1
+
+    for sonar_zip in sonar_zip_paths:
+        with zipfile.ZipFile(sonar_zip, "r") as zf:
+            for info in sorted(zf.infolist(), key=lambda item: item.filename):
+                if info.is_dir() or not info.filename.lower().endswith(".csv"):
+                    continue
+
+                with zf.open(info, "r") as raw:
+                    with io.TextIOWrapper(
+                        raw, encoding="utf-8-sig", errors="replace", newline=""
+                    ) as stream:
+                        label = f"{sonar_zip.name}:{info.filename}"
+                        file_summaries.append(
+                            summarize_sonar_csv_stream(
+                                stream,
+                                label,
+                                transform=transform,
+                                min_depth_m=min_depth_m,
+                                max_points=max_points,
+                                rng=rng,
+                                reservoir=reservoir,
+                                global_state=global_state,
+                                file_index=file_index,
+                            )
+                        )
+                file_index += 1
+
+    valid_files = [f for f in file_summaries if f.get("valid_points", 0) > 0]
+    if global_state["valid_points"] == 0:
+        return None
+
+    sampled_by_file = Counter(point[3] for point in reservoir)
+    for summary in file_summaries:
+        idx = summary.pop("index", None)
+        summary["sampled_points"] = sampled_by_file.get(idx, 0) if idx is not None else 0
+
+    points = [[float(x), float(y), float(depth)] for x, y, depth, _ in reservoir]
+
+    return {
+        "transform": transform,
+        "point_fields": ["x", "y", "depth_m"],
+        "points": points,
+        "point_count_input": int(global_state["valid_points"]),
+        "point_count_sampled": len(points),
+        "sample_limit": int(max_points),
+        "min_depth_m": float(min_depth_m),
+        "depth_m": {
+            "min": float(global_state["depth_min"]),
+            "max": float(global_state["depth_max"]),
+            "mean": float(global_state["depth_sum"] / global_state["valid_points"]),
+        },
+        "bbox": {
+            "min_x": float(global_state["min_x"]),
+            "max_x": float(global_state["max_x"]),
+            "min_y": float(global_state["min_y"]),
+            "max_y": float(global_state["max_y"]),
+        },
+        "file_count": len(valid_files),
+        "files": file_summaries,
+    }
 
 
 def load_shapefile_points(shp: Path, dbf: Path, shx: Path) -> dict[str, Any]:
@@ -376,7 +811,7 @@ def build_cross_sections(
 def main() -> None:
     args = parse_args()
 
-    shp, dbf, shx, overview, mat_files, source = resolve_inputs(args)
+    shp, dbf, shx, overview, mat_files, source, extracted_dir = resolve_inputs(args)
 
     print(f"Loading shapefile: {shp.name}")
     river_banks = load_shapefile_points(shp, dbf, shx)
@@ -385,6 +820,30 @@ def main() -> None:
     print(f"Loading overview: {overview.name}")
     overview_rows, sheet_name = load_overview_rows(overview)
     print(f"  rows: {len(overview_rows)} (sheet: {sheet_name})")
+
+    sonar_zip_paths, sonar_csv_paths = resolve_sonar_inputs(args, extracted_dir, source)
+    sonar_bottom = None
+    if sonar_zip_paths or sonar_csv_paths:
+        print("Loading sonar bottom data")
+        if sonar_zip_paths:
+            print(f"  sonar zips: {len(sonar_zip_paths)}")
+        if sonar_csv_paths:
+            print(f"  sonar csv candidates: {len(sonar_csv_paths)}")
+        sonar_bottom = load_sonar_bottom_data(
+            overview_rows=overview_rows,
+            sonar_zip_paths=sonar_zip_paths,
+            sonar_csv_paths=sonar_csv_paths,
+            max_points=args.sonar_max_points,
+            min_depth_m=args.sonar_min_depth_m,
+        )
+        if sonar_bottom:
+            print(
+                "  sonar points: "
+                f"{sonar_bottom['point_count_sampled']}/{sonar_bottom['point_count_input']} "
+                "(sampled/input)"
+            )
+        else:
+            print("  sonar points: none found in provided csv files")
 
     print(f"Loading MAT summaries ({len(mat_files)} files)")
     mat_summaries: dict[str, dict[str, Any]] = {}
@@ -415,6 +874,7 @@ def main() -> None:
             "sheet": sheet_name,
             "row_count": len(overview_rows),
         },
+        "sonar_bottom": sonar_bottom,
         "river_banks": river_banks,
         "cross_sections": cross_sections,
     }

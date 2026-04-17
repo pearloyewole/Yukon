@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>[YUKON] Log Analysis</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <section id="onboardingRoot" class="onboarding-root">
+        <div class="onboarding-grid"></div>
+
+        <div id="setupPage" class="onboarding-page is-active">
+          <header class="setup-head shell-panel">
+            <div>
+              <h1>SET UP ANALYSIS</h1>
+              <p>Upload by clicking each tile or dragging files onto the dropzones.</p>
+            </div>
+            <button id="setupBackBtn" class="inline-btn setup-back-btn" type="button">Home</button>
+          </header>
+
+          <div class="setup-grid">
+            <section class="setup-files shell-panel">
+              <h2>FILES</h2>
+              <div class="file-grid">
+                <article class="file-card">
+                  <h3>Overview Spreadsheet</h3>
+                  <p>Upload the overview workbook used for station and metadata context.</p>
+                  <label class="dropzone" id="overviewDropzone" for="setupOverviewFile">
+                    <span>Drop file or click</span>
+                  </label>
+                  <input id="setupOverviewFile" class="hidden-file-input" type="file" accept=".xlsx,.xls" />
+                  <div id="setupOverviewFileMeta" class="file-meta">Required</div>
+                </article>
+
+                <article class="file-card">
+                  <h3>MATLAB Data (.mat zip)</h3>
+                  <p>Upload a zip bundle of cross-section .mat files.</p>
+                  <label class="dropzone" id="matDropzone" for="setupMatFile">
+                    <span>Drop file or click</span>
+                  </label>
+                  <input id="setupMatFile" class="hidden-file-input" type="file" accept=".zip" multiple />
+                  <div id="setupMatFileMeta" class="file-meta">Required</div>
+                </article>
+
+                <article class="file-card">
+                  <h3>Bottom Sonar Data</h3>
+                  <p>Upload a zip file that contains sonar CSV files.</p>
+                  <label class="dropzone" id="sonarDropzone" for="setupSonarFile">
+                    <span>Drop file or click</span>
+                  </label>
+                  <input id="setupSonarFile" class="hidden-file-input" type="file" accept=".zip" />
+                  <div id="setupSonarFileMeta" class="file-meta">Optional</div>
+                </article>
+
+                <article class="file-card">
+                  <h3>River Shapefile</h3>
+                  <p>Upload a shapefile zip (.shp/.dbf/.shx) or select all shapefile components together.</p>
+                  <label class="dropzone" id="shpDropzone" for="setupShpFile">
+                    <span>Drop file or click</span>
+                  </label>
+                  <input id="setupShpFile" class="hidden-file-input" type="file" accept=".zip,.shp,.dbf,.shx" multiple />
+                  <div id="setupShpFileMeta" class="file-meta">Required</div>
+                </article>
+              </div>
+            </section>
+
+            <section class="setup-details shell-panel">
+              <h2>DETAILS</h2>
+              <label for="analysisName">Name</label>
+              <input id="analysisName" type="text" placeholder="Enter analysis name..." />
+
+              <label for="analysisInvestigator">Investigator</label>
+              <input id="analysisInvestigator" type="text" placeholder="Enter investigator name..." />
+
+              <label for="analysisDescription">Description</label>
+              <textarea id="analysisDescription" rows="4" placeholder="Enter analysis description..."></textarea>
+
+              <label for="analysisDate">Date</label>
+              <input id="analysisDate" type="date" />
+
+              <p id="setupErrorText" class="setup-error-text" aria-live="polite"></p>
+
+              <button id="setupStartAnalysisBtn" type="button" class="start-analysis-btn">START ANALYSIS</button>
+            </section>
+          </div>
+        </div>
+
+        <div id="processingScreen" class="processing-screen" hidden>
+          <div class="processing-orb"></div>
+          <h2 id="processingTitle">Compiling Files and Setting Up Analysis</h2>
+          <p id="processingSubtitle">You can upload more files or switch them once the environment is set up.</p>
+        </div>
+      </section>
+
+      <header class="top-header">
+        <div class="top-header-brand">YUKON</div>
+        <div class="top-header-spacer"></div>
+        <div id="topHeaderActions" class="top-header-actions" aria-label="Demo quick actions"></div>
+      </header>
+
+      <main id="scene"></main>
+
+      <section class="hud card">
+        <div><strong>River:</strong> <span id="riverName">loading...</span></div>
+        <p class="subtitle">Click a cross-section marker to inspect velocity and metadata.</p>
+        <p id="counts" class="meta"></p>
+        <p id="statusText" class="meta">Starting...</p>
+        <div class="hud-actions">
+          <button id="openUploadPanel" type="button">Load river analysis</button>
+          <button id="resetView" type="button">Reset camera</button>
+          <button id="viewerHomeBtn" type="button">Home</button>
+        </div>
+        <label class="hud-toggle">
+          <input id="toggleCrossSections" type="checkbox" checked />
+          Show colored cross-sections
+        </label>
+      </section>
+
+      <aside id="viewerToolbar" class="viewer-toolbar" aria-label="Map tools">
+        <button id="toolSheetBtn" class="viewer-tool-btn" type="button" title="Cross-section sheet" aria-label="Open cross-section sheet">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <rect x="3.5" y="4.5" width="17" height="15" rx="2.2" stroke="currentColor" stroke-width="1.8"></rect>
+            <path d="M3.5 9.5H20.5" stroke="currentColor" stroke-width="1.8"></path>
+            <path d="M9 9.5V19.5" stroke="currentColor" stroke-width="1.8"></path>
+          </svg>
+          <span id="sheetCountBadge" class="viewer-tool-badge">0</span>
+        </button>
+        <button id="toolMeasureBtn" class="viewer-tool-btn" type="button" title="Measure distance" aria-label="Enable distance measurement">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M6.2 17.8L16.7 7.3C17.5 6.5 18.8 6.5 19.6 7.3L20.7 8.4C21.5 9.2 21.5 10.5 20.7 11.3L10.2 21.8C9.4 22.6 8.1 22.6 7.3 21.8L6.2 20.7C5.4 19.9 5.4 18.6 6.2 17.8Z" stroke="currentColor" stroke-width="1.8"></path>
+            <path d="M10 18L9 17" stroke="currentColor" stroke-width="1.8"></path>
+            <path d="M12.5 15.5L11 14" stroke="currentColor" stroke-width="1.8"></path>
+            <path d="M15 13L14 12" stroke="currentColor" stroke-width="1.8"></path>
+          </svg>
+        </button>
+      </aside>
+
+      <aside id="sheetPanel" class="sheet-panel is-hidden" aria-hidden="true">
+        <div class="sheet-panel-head">
+          <h3>Analysis Sheet</h3>
+          <div class="sheet-panel-actions">
+            <button id="clearSheetBtn" class="inline-btn" type="button">Clear</button>
+            <button id="closeSheetPanelBtn" class="inline-btn" type="button">Close</button>
+          </div>
+        </div>
+        <div class="sheet-sections">
+          <section class="sheet-section">
+            <h4 class="sheet-section-title">Cross-sections</h4>
+            <div id="sheetTableWrap" class="sheet-table-wrap">
+              <p class="sheet-empty">Click a cross-section marker, then add it to the sheet.</p>
+            </div>
+          </section>
+          <section class="sheet-section">
+            <h4 class="sheet-section-title">Measurements</h4>
+            <div id="measurementTableWrap" class="sheet-table-wrap">
+              <p class="sheet-empty">Use the ruler tool, click-drag on the map, and each measurement is saved here.</p>
+            </div>
+          </section>
+        </div>
+      </aside>
+
+      <div id="measureReadout" class="measure-readout is-hidden" aria-live="polite"></div>
+
+      <aside id="detailsPanel" class="sidebar is-hidden" aria-hidden="true">
+        <div id="sidebarResizer" class="sidebar-resizer" aria-hidden="true"></div>
+        <section class="card sidebar-card">
+          <div class="sidebar-head">
+            <h3>Cross-section details</h3>
+            <button id="closeSidebar" class="inline-btn" type="button">Close</button>
+          </div>
+          <div id="crossSectionDetails">
+            <p>Click a cross-section marker in the 3D view.</p>
+          </div>
+        </section>
+      </aside>
+    </div>
+
+    <script type="module" src="/src/log-analysis.js"></script>
+  </body>
+</html>

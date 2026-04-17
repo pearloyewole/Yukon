@@ -3,38 +3,42 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Yukon River 3D Viewer</title>
+    <title>[YUKON] Home</title>
     <link rel="stylesheet" href="/src/style.css" />
   </head>
   <body>
-    <div id="app">
-      <aside class="sidebar">
-        <h1>Yukon Explorer</h1>
-        <p class="subtitle">Upload shapefile (.shp) for river, cross-section (.mat) files, and overview sheet (.xlsx)</p>
+    <div id="homeApp" class="home-root onboarding-root">
+      <div class="onboarding-grid"></div>
 
-        <section class="card">
-          <div><strong>River:</strong> <span id="riverName">loading...</span></div>
-          <p id="counts" class="meta"></p>
-          <p id="statusText" class="meta">Starting...</p>
+      <main class="home-shell">
+        <header class="top-header">
+          <div class="top-header-brand">YUKON</div>
+        </header>
+
+        <section class="home-welcome shell-panel" aria-label="Welcome image">
+          <img
+            class="home-welcome-image"
+            src="/assets/home%20screen%20image.jpg"
+            alt="Aerial river scene"
+          />
         </section>
 
-        <section class="card">
-          <label for="packageFile">Load another generated river package JSON</label>
-          <input id="packageFile" type="file" accept="application/json" />
-          <button id="resetView" type="button">Reset camera</button>
+        <section class="start-panels home-panels">
+          <button id="openLoggedAnalyses" type="button" class="start-card shell-panel">
+            <h2>Logged Analyses</h2>
+            <p>Open the dedicated logged analyses page to view saved rivers.</p>
+            <div id="loggedAnalysesMeta" class="start-meta"></div>
+          </button>
+
+          <button id="openSetupPage" type="button" class="start-card shell-panel">
+            <h2>Load River Analysis</h2>
+            <p>Upload overview sheet, MAT zip, sonar zip, and river shapefile to compile JSON.</p>
+          </button>
         </section>
 
-        <section class="card">
-          <h3>Cross-section details</h3>
-          <div id="crossSectionDetails">
-            <p>Click a cross-section marker in the 3D view.</p>
-          </div>
-        </section>
-      </aside>
-
-      <main id="scene"></main>
+      </main>
     </div>
 
-    <script type="module" src="/src/main.js"></script>
+    <script type="module" src="/src/home.js"></script>
   </body>
 </html>
