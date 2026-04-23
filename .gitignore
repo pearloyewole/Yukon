@@ -2,3 +2,11 @@ node_modules/
 dist/
 .env
 .DS_Store
+
+# Local raw datasets (too large for GitHub push limits)
+Huslia.zip
+Huslia_shp.zip
+Huslia_sonar.zip
+__MACOSX/
+*.tif
+*.tiff
