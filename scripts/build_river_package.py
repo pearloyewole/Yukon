@@ -33,6 +33,11 @@ except ImportError as exc:
         "Missing dependency 'pyshp'. Install with: python -m pip install pyshp"
     ) from exc
 
+try:
+    import tifffile
+except ImportError:
+    tifffile = None
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -97,6 +102,21 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=0.0,
         help="Minimum sonar depth (meters) to include",
+    )
+    parser.add_argument(
+        "--elevation-tif",
+        action="append",
+        default=[],
+        help=(
+            "Path to an elevation GeoTIFF (.tif/.tiff) "
+            "(repeat flag to provide multiple rasters)"
+        ),
+    )
+    parser.add_argument(
+        "--elevation-max-grid",
+        type=int,
+        default=240,
+        help="Maximum rows/cols to retain for sampled elevation grid output",
     )
     return parser.parse_args()
 
@@ -204,6 +224,381 @@ def resolve_sonar_inputs(
         source["input_zip_csv_candidates"] = len(unique_csv_paths)
 
     return unique_zip_paths, unique_csv_paths
+
+
+def resolve_elevation_inputs(
+    args: argparse.Namespace,
+    extracted_dir: Path | None,
+    source: dict[str, Any],
+) -> list[Path]:
+    tif_paths: list[Path] = []
+    for tif_path_str in args.elevation_tif:
+        tif_path = Path(tif_path_str).expanduser().resolve()
+        if not tif_path.exists():
+            raise SystemExit(f"Elevation TIFF not found: {tif_path}")
+        if tif_path.suffix.lower() not in (".tif", ".tiff"):
+            raise SystemExit(f"Elevation input must be .tif/.tiff: {tif_path}")
+        tif_paths.append(tif_path)
+
+    if extracted_dir is not None:
+        tif_paths.extend(sorted(extracted_dir.rglob("*.tif")))
+        tif_paths.extend(sorted(extracted_dir.rglob("*.tiff")))
+
+    filtered_tif_paths: list[Path] = []
+    for tif_path in tif_paths:
+        parts_lower = {part.lower() for part in tif_path.parts}
+        if "__macosx" in parts_lower or tif_path.name.startswith("."):
+            continue
+        filtered_tif_paths.append(tif_path)
+
+    unique_tif_paths = list(dict.fromkeys(filtered_tif_paths))
+    if unique_tif_paths:
+        source["elevation_tif"] = [str(p) for p in unique_tif_paths]
+    return unique_tif_paths
+
+
+def parse_nodata_value(raw_value: Any) -> float | None:
+    if raw_value is None:
+        return None
+    if isinstance(raw_value, bytes):
+        raw_text = raw_value.decode("utf-8", errors="ignore")
+    else:
+        raw_text = str(raw_value)
+    text = raw_text.strip().strip("\x00")
+    if not text:
+        return None
+    try:
+        value = float(text)
+    except ValueError:
+        return None
+    return value if math.isfinite(value) else None
+
+
+def extract_geotiff_reference(page: Any, rows: int, cols: int) -> dict[str, Any] | None:
+    tags = page.tags
+    x_origin = None
+    y_origin = None
+    pixel_size_x = None
+    pixel_size_y = None
+    georef_mode = None
+
+    transform_tag = tags.get("ModelTransformationTag")
+    if transform_tag is not None:
+        vals = tuple(float(v) for v in transform_tag.value)
+        if len(vals) >= 16:
+            # GeoTIFF 4x4 transform matrix in row-major order.
+            # X = m0*col + m1*row + m3
+            # Y = m4*col + m5*row + m7
+            x_origin = vals[3]
+            y_origin = vals[7]
+            pixel_size_x = vals[0]
+            pixel_size_y = vals[5]
+            georef_mode = "model_transformation"
+
+    if (
+        x_origin is None
+        or y_origin is None
+        or pixel_size_x is None
+        or pixel_size_y is None
+    ):
+        scale_tag = tags.get("ModelPixelScaleTag")
+        tie_tag = tags.get("ModelTiepointTag")
+        if scale_tag is None or tie_tag is None:
+            return None
+        scale = tuple(float(v) for v in scale_tag.value)
+        tie = tuple(float(v) for v in tie_tag.value)
+        if len(scale) < 2 or len(tie) < 6:
+            return None
+
+        i0, j0, _, x0, y0, _ = tie[:6]
+        sx = scale[0]
+        sy = scale[1]
+        if not (math.isfinite(sx) and math.isfinite(sy) and sx != 0 and sy != 0):
+            return None
+
+        # North-up GeoTIFF convention: row index increases downward, so model Y decreases.
+        pixel_size_x = sx
+        pixel_size_y = -abs(sy)
+        x_origin = x0 - i0 * pixel_size_x
+        y_origin = y0 - j0 * pixel_size_y
+        georef_mode = "tiepoint_scale"
+
+    if not all(
+        math.isfinite(v)
+        for v in (
+            x_origin,
+            y_origin,
+            pixel_size_x,
+            pixel_size_y,
+        )
+    ):
+        return None
+
+    x_last = x_origin + (cols - 1) * pixel_size_x
+    y_last = y_origin + (rows - 1) * pixel_size_y
+    bbox_min_x = min(x_origin, x_last)
+    bbox_max_x = max(x_origin, x_last)
+    bbox_min_y = min(y_origin, y_last)
+    bbox_max_y = max(y_origin, y_last)
+
+    ascii_tag = tags.get("GeoAsciiParamsTag")
+    crs_name = None
+    if ascii_tag is not None:
+        raw_crs = str(ascii_tag.value).replace("|", " ").strip()
+        crs_name = " ".join(raw_crs.split()) if raw_crs else None
+
+    nodata_tag = tags.get("GDAL_NODATA")
+    nodata = parse_nodata_value(nodata_tag.value) if nodata_tag is not None else None
+
+    return {
+        "mode": georef_mode,
+        "x_origin": float(x_origin),
+        "y_origin": float(y_origin),
+        "pixel_size_x": float(pixel_size_x),
+        "pixel_size_y": float(pixel_size_y),
+        "bbox": {
+            "min_x": float(bbox_min_x),
+            "max_x": float(bbox_max_x),
+            "min_y": float(bbox_min_y),
+            "max_y": float(bbox_max_y),
+        },
+        "crs_name": crs_name,
+        "nodata": nodata,
+    }
+
+
+def clip_index_range_to_bbox(
+    *,
+    rows: int,
+    cols: int,
+    x_origin: float,
+    y_origin: float,
+    pixel_size_x: float,
+    pixel_size_y: float,
+    clip_bbox: dict[str, float] | None,
+) -> tuple[int, int, int, int]:
+    row_start = 0
+    row_end = rows - 1
+    col_start = 0
+    col_end = cols - 1
+
+    if not clip_bbox:
+        return row_start, row_end, col_start, col_end
+
+    min_x = clip_bbox.get("min_x")
+    max_x = clip_bbox.get("max_x")
+    min_y = clip_bbox.get("min_y")
+    max_y = clip_bbox.get("max_y")
+    if not all(
+        isinstance(v, (int, float)) and math.isfinite(float(v))
+        for v in (min_x, max_x, min_y, max_y)
+    ):
+        return row_start, row_end, col_start, col_end
+
+    x_candidates = [
+        (float(min_x) - x_origin) / pixel_size_x,
+        (float(max_x) - x_origin) / pixel_size_x,
+    ]
+    y_candidates = [
+        (float(min_y) - y_origin) / pixel_size_y,
+        (float(max_y) - y_origin) / pixel_size_y,
+    ]
+
+    raw_col_start = math.floor(min(x_candidates))
+    raw_col_end = math.ceil(max(x_candidates))
+    raw_row_start = math.floor(min(y_candidates))
+    raw_row_end = math.ceil(max(y_candidates))
+
+    col_start = max(0, min(cols - 1, raw_col_start))
+    col_end = max(0, min(cols - 1, raw_col_end))
+    row_start = max(0, min(rows - 1, raw_row_start))
+    row_end = max(0, min(rows - 1, raw_row_end))
+
+    if col_end < col_start:
+        col_start, col_end = col_end, col_start
+    if row_end < row_start:
+        row_start, row_end = row_end, row_start
+
+    # Keep a minimum footprint to avoid degenerate meshes.
+    if col_end - col_start < 8:
+        col_start = 0
+        col_end = cols - 1
+    if row_end - row_start < 8:
+        row_start = 0
+        row_end = rows - 1
+
+    return row_start, row_end, col_start, col_end
+
+
+def read_elevation_raster(
+    elevation_tif_path: Path,
+    *,
+    max_grid: int,
+    river_bbox: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if tifffile is None:
+        raise SystemExit(
+            "Missing dependency 'tifffile'. Install with: python -m pip install tifffile"
+        )
+
+    with tifffile.TiffFile(elevation_tif_path) as tif:
+        if len(tif.pages) == 0:
+            return None
+
+        page = tif.pages[0]
+        raw = page.asarray(out="memmap")
+        if raw.ndim == 2:
+            raster = raw
+        elif raw.ndim == 3:
+            # If multi-band, default to first band.
+            if raw.shape[0] <= raw.shape[-1]:
+                raster = raw[0]
+            else:
+                raster = raw[..., 0]
+        else:
+            return None
+
+        raster = np.asarray(raster)
+        if raster.ndim != 2:
+            return None
+
+        rows, cols = raster.shape
+        georef = extract_geotiff_reference(page, rows, cols)
+        if georef is None:
+            return None
+
+        clip_bbox = None
+        if river_bbox is not None:
+            rb_min_x = to_float(river_bbox.get("min_x"))
+            rb_max_x = to_float(river_bbox.get("max_x"))
+            rb_min_y = to_float(river_bbox.get("min_y"))
+            rb_max_y = to_float(river_bbox.get("max_y"))
+            if None not in (rb_min_x, rb_max_x, rb_min_y, rb_max_y):
+                span_x = max(1.0, rb_max_x - rb_min_x)
+                span_y = max(1.0, rb_max_y - rb_min_y)
+                margin = max(800.0, 0.2 * max(span_x, span_y))
+                clip_bbox = {
+                    "min_x": rb_min_x - margin,
+                    "max_x": rb_max_x + margin,
+                    "min_y": rb_min_y - margin,
+                    "max_y": rb_max_y + margin,
+                }
+
+        row_start, row_end, col_start, col_end = clip_index_range_to_bbox(
+            rows=rows,
+            cols=cols,
+            x_origin=georef["x_origin"],
+            y_origin=georef["y_origin"],
+            pixel_size_x=georef["pixel_size_x"],
+            pixel_size_y=georef["pixel_size_y"],
+            clip_bbox=clip_bbox,
+        )
+
+        max_grid = max(16, int(max_grid))
+        sample_rows = min(max_grid, row_end - row_start + 1)
+        sample_cols = min(max_grid, col_end - col_start + 1)
+
+        row_indices = np.linspace(row_start, row_end, sample_rows).astype(int)
+        col_indices = np.linspace(col_start, col_end, sample_cols).astype(int)
+        row_indices = np.unique(row_indices)
+        col_indices = np.unique(col_indices)
+        if row_indices.size < 2 or col_indices.size < 2:
+            return None
+
+        sampled = np.asarray(raster[np.ix_(row_indices, col_indices)], dtype=float)
+        nodata = georef.get("nodata")
+
+        invalid = ~np.isfinite(sampled)
+        if nodata is not None:
+            nodata_tol = max(1e-6, abs(float(nodata)) * 1e-6)
+            invalid |= np.isclose(sampled, float(nodata), rtol=0.0, atol=nodata_tol)
+        sampled[invalid] = np.nan
+
+        valid = sampled[np.isfinite(sampled)]
+        if valid.size == 0:
+            return None
+
+        values: list[list[float | None]] = []
+        for r in range(sampled.shape[0]):
+            row_values: list[float | None] = []
+            for c in range(sampled.shape[1]):
+                value = sampled[r, c]
+                row_values.append(float(value) if math.isfinite(value) else None)
+            values.append(row_values)
+
+    sample_min_x = georef["x_origin"] + float(np.min(col_indices)) * georef["pixel_size_x"]
+    sample_max_x = georef["x_origin"] + float(np.max(col_indices)) * georef["pixel_size_x"]
+    sample_min_y = georef["y_origin"] + float(np.min(row_indices)) * georef["pixel_size_y"]
+    sample_max_y = georef["y_origin"] + float(np.max(row_indices)) * georef["pixel_size_y"]
+
+    elev_p02 = float(np.percentile(valid, 2))
+    elev_p50 = float(np.percentile(valid, 50))
+    elev_p98 = float(np.percentile(valid, 98))
+    relief = max(0.001, elev_p98 - elev_p02)
+    vertical_scale = max(0.2, min(8.0, 12.0 / relief))
+
+    return {
+        "source_file": str(elevation_tif_path),
+        "shape": {
+            "rows": int(rows),
+            "cols": int(cols),
+        },
+        "bbox": {
+            "min_x": float(min(sample_min_x, sample_max_x)),
+            "max_x": float(max(sample_min_x, sample_max_x)),
+            "min_y": float(min(sample_min_y, sample_max_y)),
+            "max_y": float(max(sample_min_y, sample_max_y)),
+        },
+        "georeference": {
+            "mode": georef["mode"],
+            "x_origin": georef["x_origin"],
+            "y_origin": georef["y_origin"],
+            "pixel_size_x": georef["pixel_size_x"],
+            "pixel_size_y": georef["pixel_size_y"],
+            "crs_name": georef["crs_name"],
+            "nodata": nodata,
+        },
+        "sample": {
+            "rows": int(row_indices.size),
+            "cols": int(col_indices.size),
+            "row_indices": [int(v) for v in row_indices.tolist()],
+            "col_indices": [int(v) for v in col_indices.tolist()],
+            "values": values,
+            "valid_count": int(valid.size),
+            "value_stats": {
+                "min": float(np.min(valid)),
+                "max": float(np.max(valid)),
+                "mean": float(np.mean(valid)),
+            },
+        },
+        "display": {
+            "elevation_reference_m": elev_p50,
+            "vertical_scale": vertical_scale,
+            "clip_percentile_low_m": elev_p02,
+            "clip_percentile_high_m": elev_p98,
+        },
+    }
+
+
+def load_elevation_raster_data(
+    *,
+    elevation_tif_paths: list[Path],
+    max_grid: int,
+    river_bbox: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if not elevation_tif_paths:
+        return None
+
+    for tif_path in elevation_tif_paths:
+        raster = read_elevation_raster(
+            tif_path,
+            max_grid=max_grid,
+            river_bbox=river_bbox,
+        )
+        if raster is not None:
+            return raster
+
+    return None
 
 
 def to_json_value(value: Any) -> Any:
@@ -822,6 +1217,7 @@ def main() -> None:
     print(f"  rows: {len(overview_rows)} (sheet: {sheet_name})")
 
     sonar_zip_paths, sonar_csv_paths = resolve_sonar_inputs(args, extracted_dir, source)
+    elevation_tif_paths = resolve_elevation_inputs(args, extracted_dir, source)
     sonar_bottom = None
     if sonar_zip_paths or sonar_csv_paths:
         print("Loading sonar bottom data")
@@ -844,6 +1240,25 @@ def main() -> None:
             )
         else:
             print("  sonar points: none found in provided csv files")
+
+    elevation_raster = None
+    if elevation_tif_paths:
+        print("Loading elevation raster data")
+        print(f"  elevation TIFF candidates: {len(elevation_tif_paths)}")
+        elevation_raster = load_elevation_raster_data(
+            elevation_tif_paths=elevation_tif_paths,
+            max_grid=args.elevation_max_grid,
+            river_bbox=river_banks.get("bbox"),
+        )
+        if elevation_raster:
+            sample_meta = elevation_raster.get("sample", {})
+            print(
+                "  elevation sample grid: "
+                f"{sample_meta.get('rows', 0)}x{sample_meta.get('cols', 0)} "
+                f"({sample_meta.get('valid_count', 0)} valid cells)"
+            )
+        else:
+            print("  elevation raster: no usable cells found")
 
     print(f"Loading MAT summaries ({len(mat_files)} files)")
     mat_summaries: dict[str, dict[str, Any]] = {}
@@ -874,6 +1289,7 @@ def main() -> None:
             "sheet": sheet_name,
             "row_count": len(overview_rows),
         },
+        "elevation_raster": elevation_raster,
         "sonar_bottom": sonar_bottom,
         "river_banks": river_banks,
         "cross_sections": cross_sections,

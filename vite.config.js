@@ -109,12 +109,26 @@ async function runUploadPipeline({ manifestPath, riverId, outPath }) {
   ];
 
   const attempts = ['python3', 'python'];
+  let lastResult = null;
   for (const executable of attempts) {
     const result = await runCommand(executable, args, __dirname);
     if (result.error && result.error.code === 'ENOENT') {
       continue;
     }
+    if (result.code === 0) {
+      return result;
+    }
+    lastResult = result;
+
+    const combinedOutput = `${result.stderr || ''}\n${result.stdout || ''}`;
+    if (/ModuleNotFoundError|No module named/i.test(combinedOutput)) {
+      continue;
+    }
     return result;
+  }
+
+  if (lastResult) {
+    return lastResult;
   }
 
   return {
@@ -168,6 +182,7 @@ function uploadPipelineApiPlugin() {
       const matFiles = form.getAll('matFiles').filter(isFileLike);
       const shpFiles = form.getAll('shpFiles').filter(isFileLike);
       const sonarFiles = form.getAll('sonarFiles').filter(isFileLike);
+      const tifFiles = form.getAll('tifFiles').filter(isFileLike);
 
       if (!isFileLike(overviewFile)) {
         sendJson(res, 400, { error: 'overviewFile is required.' });
@@ -188,17 +203,20 @@ function uploadPipelineApiPlugin() {
       const matDir = path.join(incomingDir, 'mat');
       const shapeDir = path.join(incomingDir, 'shape');
       const sonarDir = path.join(incomingDir, 'sonar');
+      const elevationDir = path.join(incomingDir, 'elevation');
 
       const overviewSaved = await saveUploadedFiles([overviewFile], overviewDir, 'overview');
       const matSaved = await saveUploadedFiles(matFiles, matDir, 'mat');
       const shpSaved = await saveUploadedFiles(shpFiles, shapeDir, 'shape');
       const sonarSaved = await saveUploadedFiles(sonarFiles, sonarDir, 'sonar');
+      const tifSaved = await saveUploadedFiles(tifFiles, elevationDir, 'elevation');
 
       const manifest = {
         overview_file: overviewSaved[0],
         mat_files: matSaved,
         shp_files: shpSaved,
         sonar_files: sonarSaved,
+        tif_files: tifSaved,
       };
       const manifestPath = path.join(tempRoot, 'manifest.json');
       await fs.writeFile(manifestPath, JSON.stringify(manifest), 'utf-8');
@@ -221,10 +239,14 @@ function uploadPipelineApiPlugin() {
       const sonarWarning = sonarSaved.length > 0 && !packageData?.sonar_bottom
         ? 'No usable sonar bottom points were found in the uploaded sonar data.'
         : '';
+      const elevationWarning = tifSaved.length > 0 && !packageData?.elevation_raster
+        ? 'No usable elevation surface was found in the uploaded TIFF data.'
+        : '';
 
       sendJson(res, 200, {
         packageData,
         sonarWarning,
+        elevationWarning,
       });
     } catch (error) {
       const message = error?.message || String(error);

@@ -55,6 +55,16 @@
                 </article>
 
                 <article class="file-card">
+                  <h3>Elevation GeoTIFF</h3>
+                  <p>Upload a georeferenced terrain raster (.tif/.tiff, or zip containing one).</p>
+                  <label class="dropzone" id="elevationDropzone" for="setupElevationFile">
+                    <span>Drop file or click</span>
+                  </label>
+                  <input id="setupElevationFile" class="hidden-file-input" type="file" accept=".tif,.tiff,.zip" multiple />
+                  <div id="setupElevationFileMeta" class="file-meta">Optional</div>
+                </article>
+
+                <article class="file-card">
                   <h3>River Shapefile</h3>
                   <p>Upload a shapefile zip (.shp/.dbf/.shx) or select all shapefile components together.</p>
                   <label class="dropzone" id="shpDropzone" for="setupShpFile">

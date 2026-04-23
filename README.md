@@ -21,6 +21,7 @@ python /Users/pearloyewole/yukon/scripts/build_river_package.py \
   --overview /Users/pearloyewole/yukon/ADCP_Huslia_All_overview.xlsx \
   --mat-glob "/Users/pearloyewole/yukon/data/mat/*.mat" \
   --sonar-zip /Users/pearloyewole/yukon/Huslia_sonar.zip \
+  --elevation-tif /Users/pearloyewole/yukon/__MACOSX/HUSLIA_GEG_01M.tif \
   --out /Users/pearloyewole/yukon/public/river-packages/huslia.json
 
 npm run dev
@@ -51,6 +52,7 @@ Expected zip contents:
 - one overview `.xlsx`
 - one or more `.mat` files (any folder depth)
 - optional sonar bottom `.csv` files (any folder depth)
+- optional elevation GeoTIFF (`.tif`/`.tiff`)
 
 Then load that JSON from the file picker in the app, or set it as default in `/Users/pearloyewole/yukon/src/main.js`.
 
@@ -70,8 +72,24 @@ python /Users/pearloyewole/yukon/scripts/build_river_package.py \
 
 Sonar CSV columns are auto-detected when they include latitude/longitude/depth fields. The output package includes a `sonar_bottom` section with sampled bottom points and depth stats.
 
+## Elevation GeoTIFF (optional)
+
+You can add terrain context around the river from one or more GeoTIFF rasters:
+
+```bash
+python /Users/pearloyewole/yukon/scripts/build_river_package.py \
+  --river-id my-river \
+  --shp /path/to/MyRiver.shp \
+  --overview /path/to/MyRiver_overview.xlsx \
+  --mat-glob "/path/to/mat/*.mat" \
+  --elevation-tif /path/to/my_elevation.tif \
+  --out /Users/pearloyewole/yukon/public/river-packages/my-river.json
+```
+
+The build script samples the raster to a browser-safe grid (configurable with `--elevation-max-grid`) and writes it to `elevation_raster` in the package.
+
 ## Notes
 
-- Python dependencies used by the build script: `numpy`, `scipy`, `openpyxl`, `pyshp`.
+- Python dependencies used by the build script: `numpy`, `scipy`, `openpyxl`, `pyshp`, `tifffile`.
 - Bank points are rendered with displacement-based elevation and outer/inner bend color.
 - Cross-section markers are placed from overview UTM start/end coordinates.

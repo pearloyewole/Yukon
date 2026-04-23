@@ -39,12 +39,15 @@ const els = {
   setupOverviewFile: document.getElementById('setupOverviewFile'),
   setupMatFile: document.getElementById('setupMatFile'),
   setupSonarFile: document.getElementById('setupSonarFile'),
+  setupElevationFile: document.getElementById('setupElevationFile'),
   setupSonarFileMeta: document.getElementById('setupSonarFileMeta'),
+  setupElevationFileMeta: document.getElementById('setupElevationFileMeta'),
   setupOverviewFileMeta: document.getElementById('setupOverviewFileMeta'),
   setupMatFileMeta: document.getElementById('setupMatFileMeta'),
   setupShpFile: document.getElementById('setupShpFile'),
   setupShpFileMeta: document.getElementById('setupShpFileMeta'),
   sonarDropzone: document.getElementById('sonarDropzone'),
+  elevationDropzone: document.getElementById('elevationDropzone'),
   overviewDropzone: document.getElementById('overviewDropzone'),
   matDropzone: document.getElementById('matDropzone'),
   shpDropzone: document.getElementById('shpDropzone'),
@@ -83,6 +86,7 @@ const setupState = {
     overview: null,
     mat: [],
     sonar: [],
+    elevation: [],
     shp: null,
   },
 };
@@ -94,7 +98,7 @@ let controls;
 let raycaster;
 let mouse;
 let clock;
-let groundGrid;
+let groundBasePlane = null;
 
 let clickableMarkers = [];
 let riverVideoPickTargets = [];
@@ -162,9 +166,12 @@ function initScene() {
   dir.position.set(450, 800, 300);
   scene.add(dir);
 
-  groundGrid = new THREE.GridHelper(6000, 60, 0x2a3d50, 0x142233);
-  groundGrid.position.y = -1;
-  scene.add(groundGrid);
+  groundBasePlane = createGroundBasePlane({
+    center: new THREE.Vector3(0, 0, 0),
+    y: -1.35,
+    size: 6000,
+  });
+  scene.add(groundBasePlane);
 
   raycaster = new THREE.Raycaster();
   raycaster.params.Line.threshold = 12;
@@ -262,11 +269,13 @@ function initOnboardingUi() {
   bindSetupFileInput(els.setupOverviewFile, 'overview', els.setupOverviewFileMeta, 'Required');
   bindSetupFileInput(els.setupMatFile, 'mat', els.setupMatFileMeta, 'Required');
   bindSetupFileInput(els.setupSonarFile, 'sonar', els.setupSonarFileMeta, 'Optional');
+  bindSetupFileInput(els.setupElevationFile, 'elevation', els.setupElevationFileMeta, 'Optional');
   bindSetupFileInput(els.setupShpFile, 'shp', els.setupShpFileMeta, 'Required');
 
   bindDropzone(els.overviewDropzone, 'overview', els.setupOverviewFileMeta, 'Required');
   bindDropzone(els.matDropzone, 'mat', els.setupMatFileMeta, 'Required');
   bindDropzone(els.sonarDropzone, 'sonar', els.setupSonarFileMeta, 'Optional');
+  bindDropzone(els.elevationDropzone, 'elevation', els.setupElevationFileMeta, 'Optional');
   bindDropzone(els.shpDropzone, 'shp', els.setupShpFileMeta, 'Required');
 
   els.openSetupPage?.addEventListener('click', () => {
@@ -299,7 +308,9 @@ function bindSetupFileInput(input, key, metaEl, emptyLabel) {
   if (!input) return;
   input.addEventListener('change', (event) => {
     const files = Array.from(event.target.files || []);
-    const value = key === 'mat' || key === 'sonar' || key === 'shp' ? files : (files[0] || null);
+    const value = key === 'mat' || key === 'sonar' || key === 'elevation' || key === 'shp'
+      ? files
+      : (files[0] || null);
     setSetupFile(key, value, metaEl, emptyLabel);
   });
 }
@@ -332,7 +343,7 @@ function bindDropzone(dropzone, key, metaEl, emptyLabel) {
     dropzone.classList.remove('is-dragover');
     const files = Array.from(event.dataTransfer?.files || []);
     if (files.length === 0) return;
-    const value = key === 'mat' || key === 'sonar' || key === 'shp' ? files : files[0];
+    const value = key === 'mat' || key === 'sonar' || key === 'elevation' || key === 'shp' ? files : files[0];
     setSetupFile(key, value, metaEl, emptyLabel);
   });
 }
@@ -470,23 +481,32 @@ async function startAnalysisFromSetup() {
     const primaryShpName = shpFiles[0].name || 'river';
     const riverId = els.analysisName?.value?.trim() || primaryShpName.replace(/\.(shp|dbf|shx|zip)$/i, '');
     const sonarFiles = Array.isArray(setupState.files.sonar) ? setupState.files.sonar : [];
+    const elevationFiles = Array.isArray(setupState.files.elevation) ? setupState.files.elevation : [];
     const compiled = await compileRiverPackageFromUploads({
       riverId,
       overviewFile,
       matFiles,
       shpFiles,
       sonarFiles,
+      elevationFiles,
     });
     const packageData = compiled.packageData;
     const sonarWarning = compiled.sonarWarning || '';
+    const elevationWarning = compiled.elevationWarning || '';
     const crossSectionCount = Array.isArray(packageData.cross_sections) ? packageData.cross_sections.length : 0;
     const shapefileLabel = compiled?.packageData?.source?.shp || primaryShpName;
 
     setProcessingText('Compiling Files and Setting Up Analysis', 'Building 3D river scene...');
     loadPackage(packageData);
     const sonarLabel = sonarFiles.length > 0 ? `, sonar ${sonarFiles.length} file(s)` : '';
+    const elevationLabel = elevationFiles.length > 0 ? `, elevation ${elevationFiles.length} file(s)` : '';
     const sonarStatus = sonarWarning ? ` Sonar skipped: ${sonarWarning}` : '';
-    setStatus(`Compiled JSON package and loaded ${shapefileLabel} with ${crossSectionCount} cross-sections, ${matFiles.length} MAT bundle/file input(s), overview ${overviewFile.name}${sonarLabel}.${sonarStatus}`);
+    const elevationStatus = elevationWarning ? ` Elevation skipped: ${elevationWarning}` : '';
+    setStatus(
+      `Compiled JSON package and loaded ${shapefileLabel} with ${crossSectionCount} cross-sections, `
+      + `${matFiles.length} MAT bundle/file input(s), overview ${overviewFile.name}${sonarLabel}${elevationLabel}.`
+      + `${sonarStatus}${elevationStatus}`
+    );
 
     const analysisEntry = {
       id: Date.now(),
@@ -603,7 +623,14 @@ async function collectMatSourceNames(files) {
   return Array.from(new Set(names));
 }
 
-async function compileRiverPackageFromUploads({ riverId, overviewFile, matFiles, shpFiles, sonarFiles }) {
+async function compileRiverPackageFromUploads({
+  riverId,
+  overviewFile,
+  matFiles,
+  shpFiles,
+  sonarFiles,
+  elevationFiles,
+}) {
   const formData = new FormData();
   formData.append('riverId', String(riverId || '').trim());
   formData.append('overviewFile', overviewFile);
@@ -615,6 +642,9 @@ async function compileRiverPackageFromUploads({ riverId, overviewFile, matFiles,
   }
   for (const file of sonarFiles || []) {
     if (file) formData.append('sonarFiles', file);
+  }
+  for (const file of elevationFiles || []) {
+    if (file) formData.append('tifFiles', file);
   }
 
   const response = await fetch('/api/compile-river-package', {
@@ -641,6 +671,7 @@ async function compileRiverPackageFromUploads({ riverId, overviewFile, matFiles,
   return {
     packageData: payload.packageData,
     sonarWarning: payload.sonarWarning || '',
+    elevationWarning: payload.elevationWarning || '',
   };
 }
 
@@ -1922,7 +1953,8 @@ function renderLoggedAnalysesMeta() {
 async function loadPackageFromUrl(url) {
   setStatus(`Fetching ${url}...`);
   const data = await fetchPackageJson(url);
-  loadPackage(data);
+  const dataWithElevation = await mergeElevationSidecar(url, data);
+  loadPackage(dataWithElevation);
   setStatus(`Loaded ${url}`);
 }
 
@@ -1932,6 +1964,33 @@ async function fetchPackageJson(url) {
     throw new Error(`${response.status} ${response.statusText}`);
   }
   return response.json();
+}
+
+async function mergeElevationSidecar(packageUrl, packageData) {
+  if (!packageData || packageData.elevation_raster) {
+    return packageData;
+  }
+
+  let sidecarUrl = null;
+  if (typeof packageUrl === 'string' && packageUrl.includes('.json')) {
+    sidecarUrl = packageUrl.replace(/\.json(\?.*)?$/i, '.elevation.json$1');
+  }
+  if (!sidecarUrl || sidecarUrl === packageUrl) {
+    return packageData;
+  }
+
+  try {
+    const sidecar = await fetchPackageJson(sidecarUrl);
+    if (sidecar && typeof sidecar === 'object' && sidecar.elevation_raster) {
+      return {
+        ...packageData,
+        elevation_raster: sidecar.elevation_raster,
+      };
+    }
+  } catch {
+    // Optional sidecar; ignore missing/invalid files.
+  }
+  return packageData;
 }
 
 function loadPackage(data) {
@@ -1975,6 +2034,15 @@ function loadPackage(data) {
     currentRiverGroup.add(riverVideoGroup);
   }
   const riverEnvelope = buildRiverEnvelopeFromBankPoints(bankPoints);
+  const elevationRaster = data.elevation_raster || null;
+  if (elevationRaster) {
+    const elevationMesh = buildElevationTerrainMesh(elevationRaster);
+    if (elevationMesh) {
+      currentRiverGroup.add(elevationMesh);
+    } else {
+      setStatus('Elevation raster was present but could not be rendered.');
+    }
+  }
 
   const sonarBottomPoints = Array.isArray(data.sonar_bottom?.points) ? data.sonar_bottom.points : [];
   if (sonarBottomPoints.length > 0) {
@@ -2002,11 +2070,17 @@ function loadPackage(data) {
   const mappedCount = (data.cross_sections || []).filter((s) => s.line?.has_geometry).length;
   const videoCameraCount = riverVideoPickTargets.length;
   const sonarCount = sonarBottomPoints.length;
+  const elevationSampleRows = Number(data.elevation_raster?.sample?.rows) || 0;
+  const elevationSampleCols = Number(data.elevation_raster?.sample?.cols) || 0;
+  const elevationCellCount = elevationSampleRows > 0 && elevationSampleCols > 0
+    ? elevationSampleRows * elevationSampleCols
+    : 0;
 
   els.riverName.textContent = riverName;
   const sonarLabel = sonarCount > 0 ? `, ${sonarCount.toLocaleString()} sonar bottom points` : '';
   const videoLabel = videoCameraCount > 0 ? `, ${videoCameraCount} river video cameras` : '';
-  els.counts.textContent = `${bankPoints.length.toLocaleString()} bank points, ${mappedCount}/${sectionCount} mapped cross-sections${videoLabel}${sonarLabel}`;
+  const elevationLabel = elevationCellCount > 0 ? `, ${elevationCellCount.toLocaleString()} elevation cells` : '';
+  els.counts.textContent = `${bankPoints.length.toLocaleString()} bank points, ${mappedCount}/${sectionCount} mapped cross-sections${videoLabel}${sonarLabel}${elevationLabel}`;
   els.details.innerHTML = '<p>Click a cross-section marker to view a MATLAB-style cross-section plot and metadata.</p>';
   setCurtainVisibility(showColoredCrossSections);
   closeDetailsPanel();
@@ -2296,6 +2370,150 @@ function buildSonarBottomPointCloud(sonarBottom, riverEnvelope, depthCalibration
   const cloud = new THREE.Points(geometry, material);
   cloud.renderOrder = 1;
   return cloud;
+}
+
+function buildElevationTerrainMesh(elevationRaster) {
+  const sample = elevationRaster?.sample;
+  const georef = elevationRaster?.georeference;
+  const display = elevationRaster?.display || {};
+  const values = Array.isArray(sample?.values) ? sample.values : [];
+  const rowIndices = Array.isArray(sample?.row_indices) ? sample.row_indices.map((v) => Number(v)) : [];
+  const colIndices = Array.isArray(sample?.col_indices) ? sample.col_indices.map((v) => Number(v)) : [];
+
+  if (values.length < 2 || rowIndices.length < 2 || colIndices.length < 2) return null;
+  if (values.length !== rowIndices.length) return null;
+
+  const xOrigin = Number(georef?.x_origin);
+  const yOrigin = Number(georef?.y_origin);
+  const pixelSizeX = Number(georef?.pixel_size_x);
+  const pixelSizeY = Number(georef?.pixel_size_y);
+  if (
+    !Number.isFinite(xOrigin)
+    || !Number.isFinite(yOrigin)
+    || !Number.isFinite(pixelSizeX)
+    || !Number.isFinite(pixelSizeY)
+    || pixelSizeX === 0
+    || pixelSizeY === 0
+  ) {
+    return null;
+  }
+
+  const elevationRef = Number.isFinite(Number(display?.elevation_reference_m))
+    ? Number(display.elevation_reference_m)
+    : 0;
+  const verticalScale = Number.isFinite(Number(display?.vertical_scale))
+    ? clamp(Number(display.vertical_scale), 0.08, 12)
+    : 1;
+  const baseY = 0;
+
+  let minElev = Infinity;
+  let maxElev = -Infinity;
+  for (let r = 0; r < values.length; r++) {
+    const row = values[r];
+    if (!Array.isArray(row)) continue;
+    for (let c = 0; c < colIndices.length; c++) {
+      const elevation = Number(row[c]);
+      if (!Number.isFinite(elevation)) continue;
+
+      if (elevation < minElev) minElev = elevation;
+      if (elevation > maxElev) maxElev = elevation;
+    }
+  }
+  if (!Number.isFinite(minElev) || !Number.isFinite(maxElev)) return null;
+
+  const clipLow = Number.isFinite(Number(display?.clip_percentile_low_m))
+    ? Number(display.clip_percentile_low_m)
+    : minElev;
+  const clipHigh = Number.isFinite(Number(display?.clip_percentile_high_m))
+    ? Number(display.clip_percentile_high_m)
+    : maxElev;
+  const clipRange = Math.max(0.001, clipHigh - clipLow);
+  const positions = [];
+  const colors = [];
+  const vertexIndex = Array.from({ length: rowIndices.length }, () => new Int32Array(colIndices.length).fill(-1));
+
+  for (let r = 0; r < rowIndices.length; r++) {
+    const row = values[r];
+    if (!Array.isArray(row)) continue;
+    for (let c = 0; c < colIndices.length; c++) {
+      const elevation = Number(row[c]);
+      if (!Number.isFinite(elevation)) continue;
+
+      const xRaw = xOrigin + colIndices[c] * pixelSizeX;
+      const yRaw = yOrigin + rowIndices[r] * pixelSizeY;
+
+      const x = xRaw - worldCenter.x;
+      const z = yRaw - worldCenter.y;
+      const y = (elevation - elevationRef) * verticalScale + baseY;
+
+      const vertex = positions.length / 3;
+      vertexIndex[r][c] = vertex;
+      positions.push(x, y, z);
+
+      // Color terrain by elevation with a high-contrast topographic ramp.
+      const t = clamp((elevation - clipLow) / clipRange, 0, 1);
+      const color = colorFromTopographicRamp(t);
+      colors.push(color.r, color.g, color.b);
+    }
+  }
+
+  if (positions.length < 9) return null;
+
+  const indices = [];
+  for (let r = 0; r < rowIndices.length - 1; r++) {
+    for (let c = 0; c < colIndices.length - 1; c++) {
+      const a = vertexIndex[r][c];
+      const b = vertexIndex[r][c + 1];
+      const d = vertexIndex[r + 1][c];
+      const e = vertexIndex[r + 1][c + 1];
+      if (a < 0 || b < 0 || d < 0 || e < 0) continue;
+      indices.push(a, d, b);
+      indices.push(b, d, e);
+    }
+  }
+
+  if (indices.length === 0) return null;
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+
+  const material = new THREE.MeshStandardMaterial({
+    vertexColors: true,
+    side: THREE.DoubleSide,
+    transparent: true,
+    opacity: 0.86,
+    roughness: 0.96,
+    metalness: 0.02,
+    depthWrite: false,
+  });
+
+  const terrain = new THREE.Mesh(geometry, material);
+  terrain.renderOrder = -1;
+  return terrain;
+}
+
+function colorFromTopographicRamp(t) {
+  const stops = [
+    { t: 0.0, hex: 0x1d4e89 },  // low: blue
+    { t: 0.3, hex: 0x2a9d8f },  // teal
+    { t: 0.55, hex: 0x7cb342 }, // green
+    { t: 0.78, hex: 0xc9a66b }, // tan
+    { t: 1.0, hex: 0xf2efe6 },  // high: light
+  ];
+
+  const u = clamp(t, 0, 1);
+  for (let i = 1; i < stops.length; i++) {
+    const a = stops[i - 1];
+    const b = stops[i];
+    if (u > b.t) continue;
+    const localT = (u - a.t) / Math.max(1e-6, b.t - a.t);
+    return new THREE.Color(a.hex).lerp(new THREE.Color(b.hex), localT);
+  }
+
+  return new THREE.Color(stops[stops.length - 1].hex);
 }
 
 function buildSonarBottomSurfaceFromBanks(sonarBottom, riverEnvelope, depthCalibration) {
@@ -3423,7 +3641,7 @@ function projectPointerToMeasurementPlane(event) {
   mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
   raycaster.setFromCamera(mouse, camera);
 
-  const planeY = (groundGrid?.position?.y ?? -1) + 2;
+  const planeY = getGroundReferenceY() + 2;
   const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -planeY);
   const intersection = new THREE.Vector3();
   if (!raycaster.ray.intersectPlane(plane, intersection)) {
@@ -3466,7 +3684,7 @@ function createMeasurementLine() {
 
 function updateMeasurementLine() {
   if (!measurementLine || !measurementStart || !measurementEnd) return;
-  const lineY = (groundGrid?.position?.y ?? -1) + 3;
+  const lineY = getGroundReferenceY() + 3;
   const attr = measurementLine.geometry.getAttribute('position');
   const arr = attr.array;
   arr[0] = measurementStart.x;
@@ -4191,25 +4409,48 @@ function updateGroundGridForRiver(object) {
   const span = Math.max(size.x, size.z);
 
   const targetSize = clamp(Math.ceil((span * 1.12) / 200) * 200, 2000, 140000);
-  const targetDivisions = clamp(Math.round(targetSize / 360), 45, 320);
-
-  if (groundGrid) {
-    disposeGrid(groundGrid);
-    scene.remove(groundGrid);
+  if (groundBasePlane) {
+    disposeGroundBasePlane(groundBasePlane);
+    scene.remove(groundBasePlane);
+    groundBasePlane = null;
   }
 
-  groundGrid = new THREE.GridHelper(targetSize, targetDivisions, 0x2a3d50, 0x142233);
-  groundGrid.position.set(center.x, box.min.y - 2, center.z);
-  scene.add(groundGrid);
+  groundBasePlane = createGroundBasePlane({
+    center,
+    y: box.min.y - 2.35,
+    size: targetSize,
+  });
+  scene.add(groundBasePlane);
 }
 
-function disposeGrid(grid) {
-  grid.geometry?.dispose?.();
-  if (Array.isArray(grid.material)) {
-    grid.material.forEach((m) => m?.dispose?.());
-    return;
+function getGroundReferenceY() {
+  return Number.isFinite(groundBasePlane?.position?.y)
+    ? groundBasePlane.position.y
+    : -1.35;
+}
+
+function createGroundBasePlane({ center, y, size }) {
+  const geometry = new THREE.PlaneGeometry(size, size, 1, 1);
+  const material = new THREE.MeshStandardMaterial({
+    color: 0x2c2c2c,
+    roughness: 0.98,
+    metalness: 0.0,
+    depthWrite: false,
+  });
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.rotation.x = -Math.PI / 2;
+  mesh.position.set(center.x, y, center.z);
+  mesh.renderOrder = -4;
+  return mesh;
+}
+
+function disposeGroundBasePlane(plane) {
+  plane.geometry?.dispose?.();
+  const materials = Array.isArray(plane.material) ? plane.material : [plane.material];
+  for (const material of materials) {
+    if (!material) continue;
+    material.dispose?.();
   }
-  grid.material?.dispose?.();
 }
 
 function resetCamera() {

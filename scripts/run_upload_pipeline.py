@@ -151,6 +151,23 @@ def collect_mat_files(mat_inputs: list[Path], workspace: Path) -> list[Path]:
     return copied
 
 
+def collect_elevation_tiffs(tif_inputs: list[Path], workspace: Path) -> list[Path]:
+    extracted_roots: list[Path] = []
+    direct_tiffs: list[Path] = []
+
+    for idx, item in enumerate(tif_inputs):
+        ext = item.suffix.lower()
+        if ext == ".zip":
+            extract_dir = workspace / "elevation_extracted" / f"zip_{idx:03d}"
+            unzip_to_dir(item, extract_dir)
+            extracted_roots.append(extract_dir)
+        elif ext in (".tif", ".tiff"):
+            direct_tiffs.append(item.resolve())
+
+    tiffs = direct_tiffs + gather_paths(extracted_roots, ".tif") + gather_paths(extracted_roots, ".tiff")
+    return list(dict.fromkeys(tiffs))
+
+
 def main() -> None:
     args = parse_args()
     manifest = read_manifest(Path(args.manifest).resolve())
@@ -165,6 +182,7 @@ def main() -> None:
     shp_inputs = normalize_path_list(manifest.get("shp_files"))
     mat_inputs = normalize_path_list(manifest.get("mat_files"))
     sonar_inputs = normalize_path_list(manifest.get("sonar_files"))
+    tif_inputs = normalize_path_list(manifest.get("tif_files"))
     if not shp_inputs:
         raise SystemExit("No shapefile uploads were provided.")
     if not mat_inputs:
@@ -194,6 +212,7 @@ def main() -> None:
 
         mat_copies = collect_mat_files(mat_inputs, workspace)
         mat_glob = str((mat_copies[0].parent / "*.mat").resolve())
+        elevation_tifs = collect_elevation_tiffs(tif_inputs, workspace)
 
         sonar_zip_files: list[Path] = []
         sonar_csv_files: list[Path] = []
@@ -236,6 +255,8 @@ def main() -> None:
             cmd.extend(["--sonar-zip", str(sonar_zip)])
         if sonar_csv_glob:
             cmd.extend(["--sonar-csv-glob", sonar_csv_glob])
+        for tif_path in elevation_tifs:
+            cmd.extend(["--elevation-tif", str(tif_path)])
 
         proc = subprocess.run(cmd, text=True, capture_output=True)
         if proc.stdout:
