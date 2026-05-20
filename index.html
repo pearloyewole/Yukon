@@ -10,29 +10,50 @@
     <div id="homeApp" class="home-root onboarding-root">
       <div class="onboarding-grid"></div>
 
-      <main class="home-shell">
-        <header class="top-header">
+      <main class="home-shell home-shell-modern">
+        <header class="top-header home-top-header">
           <div class="top-header-brand">YUKON</div>
         </header>
 
-        <section class="home-welcome shell-panel" aria-label="Welcome image">
-          <img
-            class="home-welcome-image"
-            src="/assets/home%20screen%20image.jpg"
-            alt="Aerial river scene"
-          />
+        <section class="home-hero shell-panel" aria-label="Welcome image">
+          <div class="home-welcome">
+            <img
+              id="homeWelcomeImage"
+              class="home-welcome-image"
+              src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="
+              alt="Aerial river scene"
+            />
+            <div class="home-hero-image-mask"></div>
+          </div>
+          <div class="home-hero-content">
+            <p class="home-hero-kicker">Prototype Workspace</p>
+            <h1>Analyze River Dynamics In One Place</h1>
+            <p class="home-hero-copy">Load hydraulic packages, inspect cross-sections in 3D, and track change through repeatable workflows.</p>
+            <div class="home-hero-chips">
+              <span class="home-hero-chip">3D cross-sections</span>
+              <span class="home-hero-chip">Velocity profiles</span>
+              <span class="home-hero-chip">Map measurements</span>
+            </div>
+          </div>
         </section>
 
-        <section class="start-panels home-panels">
-          <button id="openLoggedAnalyses" type="button" class="start-card shell-panel">
-            <h2>Logged Analyses</h2>
-            <p>Open the dedicated logged analyses page to view saved rivers.</p>
-            <div id="loggedAnalysesMeta" class="start-meta"></div>
+        <section class="start-panels home-panels home-panels-modern">
+          <button id="openSetupPage" type="button" class="start-card home-action-card shell-panel">
+            <h2>Load River Analysis</h2>
+            <p>Upload overview sheet, MAT zip, sonar zip, GeoTIFF elevation, and river shapefile to compile JSON (local backend only).</p>
+            <div class="home-card-footer">
+              <span class="home-card-meta">Upload and compile a new package</span>
+              <span class="home-card-cta">Start analysis</span>
+            </div>
           </button>
 
-          <button id="openSetupPage" type="button" class="start-card shell-panel">
-            <h2>Load River Analysis</h2>
-            <p>Upload overview sheet, MAT zip, sonar zip, GeoTIFF elevation, and river shapefile to compile JSON.</p>
+          <button id="openLoggedAnalyses" type="button" class="start-card home-action-card shell-panel">
+            <h2>Logged Analyses</h2>
+            <p>Open the saved sessions library and jump back into prior river analysis work.</p>
+            <div class="home-card-footer">
+              <span id="loggedAnalysesMeta" class="home-card-meta">No saved sessions yet - 3 preloaded rivers available</span>
+              <span class="home-card-cta">Open library</span>
+            </div>
           </button>
         </section>
 

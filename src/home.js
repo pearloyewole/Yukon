@@ -1,14 +1,22 @@
 import { getLoggedAnalyses } from './analysisStore.js';
 
+const HOME_WELCOME_IMAGE_URL = new URL('../assets/home screen image.jpg', import.meta.url).href;
+
 const els = {
   openSetupPage: document.getElementById('openSetupPage'),
   openLoggedAnalyses: document.getElementById('openLoggedAnalyses'),
   loggedAnalysesMeta: document.getElementById('loggedAnalysesMeta'),
+  homeWelcomeImage: document.getElementById('homeWelcomeImage'),
 };
 
 initHomePage();
 
 function initHomePage() {
+  if (els.homeWelcomeImage) {
+    // Use a bundled asset URL so image updates follow source-file changes.
+    els.homeWelcomeImage.src = HOME_WELCOME_IMAGE_URL;
+  }
+
   renderLoggedMeta();
 
   els.openSetupPage?.addEventListener('click', () => {
@@ -25,7 +33,7 @@ function renderLoggedMeta() {
 
   const analyses = getLoggedAnalyses();
   if (!analyses.length) {
-    els.loggedAnalysesMeta.textContent = 'No saved sessions yet - Huslia demo available';
+    els.loggedAnalysesMeta.textContent = 'No saved sessions yet - 3 preloaded rivers available';
     return;
   }
 

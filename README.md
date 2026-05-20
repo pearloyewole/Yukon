@@ -1,40 +1,62 @@
-# Yukon River 3D Viewer (Huslia First)
+# Yukon River 3D Viewer (Preloaded Rivers)
 
-This project now uses a **prebuilt river package JSON** that combines:
-- bank shapefile data (`.shp/.dbf/.shx`)
-- cross-section overview workbook (`.xlsx`)
-- cross-section MAT files (`.mat`)
+This project is currently configured with **three preloaded river packages**:
+- Huslia
+- Alakanuk
+- Beaver
 
-The Three.js app renders the river in 3D and lets you click cross-section markers to inspect metadata and flow/depth summary.
+Each package renders in the 3D viewer with cross-section plots and supporting metadata.
+
+## River data layout
+
+River source data is organized under:
+
+- `/Users/pearloyewole/yukon/data/rivers/huslia`
+- `/Users/pearloyewole/yukon/data/rivers/alakanuk`
+- `/Users/pearloyewole/yukon/data/rivers/beaver`
+
+Prebuilt viewer packages are in:
+
+- `/Users/pearloyewole/yukon/public/river-packages/huslia.json`
+- `/Users/pearloyewole/yukon/public/river-packages/alakanuk.json`
+- `/Users/pearloyewole/yukon/public/river-packages/beaver.json`
+
+Elevation sidecars are in:
+
+- `/Users/pearloyewole/yukon/public/river-packages/huslia.elevation.json`
+- `/Users/pearloyewole/yukon/public/river-packages/alakanuk.elevation.json`
+- `/Users/pearloyewole/yukon/public/river-packages/beaver.elevation.json`
+
+## Terrain toggles
+
+In the viewer HUD:
+- `Vegetation terrain (GEF)` toggles terrain source (`GEG` default, `GEF` when available)
+- `Earth terrain colors` toggles color palette (blue palette remains default)
 
 ## Quick start
 
 ```bash
 cd /Users/pearloyewole/yukon
 npm install
-
-python /Users/pearloyewole/yukon/scripts/build_river_package.py \
-  --river-id huslia \
-  --shp /Users/pearloyewole/yukon/Huslia.shp \
-  --dbf /Users/pearloyewole/yukon/Huslia.dbf \
-  --shx /Users/pearloyewole/yukon/Huslia.shx \
-  --overview /Users/pearloyewole/yukon/ADCP_Huslia_All_overview.xlsx \
-  --mat-glob "/Users/pearloyewole/yukon/data/mat/*.mat" \
-  --sonar-zip /Users/pearloyewole/yukon/Huslia_sonar.zip \
-  --elevation-tif /Users/pearloyewole/yukon/__MACOSX/HUSLIA_GEG_01M.tif \
-  --out /Users/pearloyewole/yukon/public/river-packages/huslia.json
-
 npm run dev
 ```
 
-Open the printed Vite URL.
+Then open the printed local URL and use the preloaded river spots from the HUD or Logged Analyses page.
 
-## In-app upload pipeline
+## Deploy to Vercel (No Backend)
 
-The upload flow in `log-analysis.html` now compiles packages by running
-[`scripts/build_river_package.py`](/Users/pearloyewole/yukon/scripts/build_river_package.py)
-through a Vite API endpoint (`POST /api/compile-river-package`), instead of
-parsing shapefiles/MAT data in the browser.
+This repo can be deployed to Vercel as a static site with no backend services.
+
+Included config:
+- `[/Users/pearloyewole/yukon/vercel.json](/Users/pearloyewole/yukon/vercel.json)` (builds Vite and serves `dist`)
+
+Recommended environment for Vercel:
+- `VITE_ENABLE_UPLOAD_PIPELINE=false`
+- `VITE_API_BASE_URL=` (empty)
+
+Behavior in this mode:
+- Preloaded rivers (Huslia, Alakanuk, Beaver) are fully viewable.
+- Upload-and-compile flow is disabled (it requires a backend).
 
 ## Zip pipeline for future rivers
 

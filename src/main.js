@@ -11,7 +11,35 @@ import {
   saveLoggedAnalysisEntry,
 } from './analysisStore.js';
 
-const DEFAULT_PACKAGE_URL = '/river-packages/huslia.json';
+const PRELOADED_RIVER_SPOTS = [
+  {
+    id: 'huslia',
+    label: 'Huslia',
+    packageUrl: '/river-packages/huslia.json',
+    description: 'Default Huslia package',
+  },
+  {
+    id: 'alakanuk',
+    label: 'Alakanuk',
+    packageUrl: '/river-packages/alakanuk.json',
+    description: 'Alakanuk package',
+  },
+  {
+    id: 'beaver',
+    label: 'Beaver',
+    packageUrl: '/river-packages/beaver.json',
+    description: 'Beaver package',
+  },
+];
+const DEFAULT_PRELOADED_RIVER_ID = 'huslia';
+const DEFAULT_PACKAGE_URL = getPreloadedRiverById(DEFAULT_PRELOADED_RIVER_ID)?.packageUrl || '/river-packages/huslia.json';
+const API_BASE_URL = String(import.meta.env.VITE_API_BASE_URL || '').trim().replace(/\/+$/g, '');
+const IS_LOCAL_HOST = (() => {
+  const host = String(window.location.hostname || '').toLowerCase();
+  return host === 'localhost' || host === '127.0.0.1' || host === '::1';
+})();
+const UPLOAD_PIPELINE_ENABLED = String(import.meta.env.VITE_ENABLE_UPLOAD_PIPELINE || '').trim().toLowerCase() === 'true'
+  || IS_LOCAL_HOST;
 const TIMELAPSE_VIDEO_ASSETS = [
   {
     title: 'Timelapse Camera 1',
@@ -23,6 +51,11 @@ const TIMELAPSE_VIDEO_ASSETS = [
   },
 ];
 const DEMO_RIVER_VIDEO_ICON_COUNT = 14;
+
+function getPreloadedRiverById(riverId) {
+  const key = String(riverId || '').trim().toLowerCase();
+  return PRELOADED_RIVER_SPOTS.find((item) => item.id === key) || null;
+}
 
 const els = {
   onboardingRoot: document.getElementById('onboardingRoot'),
@@ -67,6 +100,10 @@ const els = {
   sidebarResizer: document.getElementById('sidebarResizer'),
   openUploadPanel: document.getElementById('openUploadPanel'),
   toggleCrossSections: document.getElementById('toggleCrossSections'),
+  toggleEarthTerrainColors: document.getElementById('toggleEarthTerrainColors'),
+  toggleVegetationTerrain: document.getElementById('toggleVegetationTerrain'),
+  toggleSedimentSamples: document.getElementById('toggleSedimentSamples'),
+  preloadedRiverSpots: document.getElementById('preloadedRiverSpots'),
   resetView: document.getElementById('resetView'),
   viewerHomeBtn: document.getElementById('viewerHomeBtn'),
   viewerToolbar: document.getElementById('viewerToolbar'),
@@ -76,6 +113,7 @@ const els = {
   sheetPanel: document.getElementById('sheetPanel'),
   sheetTableWrap: document.getElementById('sheetTableWrap'),
   measurementTableWrap: document.getElementById('measurementTableWrap'),
+  exportSheetBtn: document.getElementById('exportSheetBtn'),
   closeSheetPanelBtn: document.getElementById('closeSheetPanelBtn'),
   clearSheetBtn: document.getElementById('clearSheetBtn'),
   measureReadout: document.getElementById('measureReadout'),
@@ -102,13 +140,19 @@ let groundBasePlane = null;
 
 let clickableMarkers = [];
 let riverVideoPickTargets = [];
+let sedimentSamplePickTargets = [];
 let curtainMeshes = [];
 let bankMigrationArrowLayer = null;
+let sedimentSampleLayer = null;
 let currentRiverGroup = null;
 let worldCenter = { x: 0, y: 0 };
 let selectedSection = null;
 let sidebarRedrawRaf = 0;
 let showColoredCrossSections = true;
+let useEarthTerrainColors = false;
+let useVegetationElevation = false;
+let currentElevationVariantKey = 'geg';
+let showSedimentSamples = false;
 let keyNavEnabled = true;
 let sheetRows = [];
 let measurementRows = [];
@@ -120,6 +164,9 @@ let measurementPointerId = null;
 let measurementStart = null;
 let measurementEnd = null;
 let measurementLine = null;
+let currentPackageData = null;
+let currentPreloadedRiverId = DEFAULT_PRELOADED_RIVER_ID;
+let mapMeasurementSegments = [];
 const keyState = {
   ArrowUp: false,
   ArrowDown: false,
@@ -127,12 +174,17 @@ const keyState = {
   ArrowRight: false,
   Shift: false,
 };
-const startupMode = new URLSearchParams(window.location.search).get('mode');
+const startupParams = new URLSearchParams(window.location.search);
+const startupMode = startupParams.get('mode');
+const startupRiverId = startupParams.get('river') || DEFAULT_PRELOADED_RIVER_ID;
 
 initScene();
 setupUiEvents();
-if (startupMode !== 'analysis') {
-  loadPackageFromUrl(DEFAULT_PACKAGE_URL).catch((err) => {
+if (startupMode !== 'analysis' && startupMode !== 'demo') {
+  const startupRiver = getPreloadedRiverById(startupRiverId) || getPreloadedRiverById(DEFAULT_PRELOADED_RIVER_ID);
+  currentPreloadedRiverId = startupRiver?.id || DEFAULT_PRELOADED_RIVER_ID;
+  const startupUrl = startupRiver?.packageUrl || DEFAULT_PACKAGE_URL;
+  loadPackageFromUrl(startupUrl).catch((err) => {
     setStatus(`Failed to load default package: ${err.message}`);
   });
 }
@@ -140,7 +192,7 @@ animate();
 
 function initScene() {
   scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x2b2f34);
+  scene.background = new THREE.Color(0x0a1f35);
 
   const width = els.sceneWrap.clientWidth;
   const height = els.sceneWrap.clientHeight;
@@ -213,6 +265,37 @@ function setupUiEvents() {
     setCurtainVisibility(showColoredCrossSections);
   });
 
+  useEarthTerrainColors = Boolean(els.toggleEarthTerrainColors?.checked ?? true);
+  els.toggleEarthTerrainColors?.addEventListener('change', () => {
+    useEarthTerrainColors = Boolean(els.toggleEarthTerrainColors.checked);
+    rebuildElevationTerrainMesh();
+    const label = useEarthTerrainColors ? 'earth terrain colors' : 'blue terrain colors';
+    setStatus(`Terrain palette set to ${label}.`);
+  });
+
+  useVegetationElevation = Boolean(els.toggleVegetationTerrain?.checked ?? false);
+  els.toggleVegetationTerrain?.addEventListener('change', () => {
+    useVegetationElevation = Boolean(els.toggleVegetationTerrain.checked);
+    rebuildElevationTerrainMesh();
+    const usingVegetation = currentElevationVariantKey === 'gef';
+    if (useVegetationElevation && !usingVegetation) {
+      setStatus('GEF terrain is not available for this river. Keeping GEG terrain.');
+      return;
+    }
+    const label = usingVegetation ? 'GEF vegetation terrain' : 'GEG terrain';
+    setStatus(`Terrain source set to ${label}.`);
+  });
+
+  showSedimentSamples = Boolean(els.toggleSedimentSamples?.checked ?? false);
+  els.toggleSedimentSamples?.addEventListener('change', () => {
+    showSedimentSamples = Boolean(els.toggleSedimentSamples.checked);
+    if (sedimentSampleLayer) {
+      sedimentSampleLayer.visible = showSedimentSamples;
+    }
+    const label = showSedimentSamples ? 'shown' : 'hidden';
+    setStatus(`Sediment samples ${label}.`);
+  });
+
   els.toolSheetBtn?.addEventListener('click', () => {
     setSheetPanelVisible(els.sheetPanel?.classList.contains('is-hidden'));
   });
@@ -226,6 +309,7 @@ function setupUiEvents() {
     sheetRows = [];
     measurementRows = [];
     measurementRowSeq = 0;
+    clearMapMeasurementSegments();
     renderSheetTable();
     setStatus('Cleared analysis sheet tables.');
     if (selectedSection) {
@@ -233,10 +317,15 @@ function setupUiEvents() {
     }
   });
 
+  els.exportSheetBtn?.addEventListener('click', () => {
+    exportSheetTablesCsv();
+  });
+
   els.toolMeasureBtn?.addEventListener('click', () => {
     setMeasurementMode(!measurementModeEnabled);
   });
 
+  renderPreloadedRiverSpots();
   renderSheetTable();
   setSheetPanelVisible(false);
 
@@ -284,7 +373,7 @@ function initOnboardingUi() {
   });
 
   els.openLoggedAnalyses?.addEventListener('click', () => {
-    void openHusliaDemo();
+    void openPreloadedRiver(DEFAULT_PRELOADED_RIVER_ID);
   });
 
   els.setupBackBtn?.addEventListener('click', () => {
@@ -301,7 +390,17 @@ function initOnboardingUi() {
   });
 
   renderLoggedAnalysesMeta();
+  applyUploadPipelineAvailability();
   applyInitialRouteMode();
+}
+
+function applyUploadPipelineAvailability() {
+  if (UPLOAD_PIPELINE_ENABLED) return;
+  if (els.setupStartAnalysisBtn) {
+    els.setupStartAnalysisBtn.disabled = true;
+    els.setupStartAnalysisBtn.title = 'Upload compile is disabled in no-backend deployments.';
+  }
+  setSetupError('Upload compile is disabled in this hosted build. Use the preloaded rivers (Huslia, Alakanuk, Beaver).');
 }
 
 function bindSetupFileInput(input, key, metaEl, emptyLabel) {
@@ -390,6 +489,7 @@ function applyInitialRouteMode() {
   const mode = params.get('mode');
   const hasStartPage = Boolean(els.startPage);
   const analysisId = params.get('analysisId');
+  const routeRiverId = params.get('river') || DEFAULT_PRELOADED_RIVER_ID;
 
   if (mode === 'analysis' && analysisId) {
     void openLoggedAnalysis(analysisId);
@@ -397,7 +497,7 @@ function applyInitialRouteMode() {
   }
 
   if (mode === 'demo') {
-    void openHusliaDemo();
+    void openPreloadedRiver(routeRiverId);
     return;
   }
 
@@ -463,6 +563,11 @@ function setSetupError(text) {
 
 async function startAnalysisFromSetup() {
   clearSetupError();
+
+  if (!UPLOAD_PIPELINE_ENABLED) {
+    setSetupError('Upload compile is disabled in this hosted build. Open a preloaded river from Saved spots or Logged Analyses.');
+    return;
+  }
 
   const overviewFile = setupState.files.overview;
   const matFiles = Array.isArray(setupState.files.mat) ? setupState.files.mat : [];
@@ -647,10 +752,17 @@ async function compileRiverPackageFromUploads({
     if (file) formData.append('tifFiles', file);
   }
 
-  const response = await fetch('/api/compile-river-package', {
-    method: 'POST',
-    body: formData,
-  });
+  let response;
+  try {
+    response = await fetch(apiUrl('/api/compile-river-package'), {
+      method: 'POST',
+      body: formData,
+    });
+  } catch (error) {
+    throw new Error(
+      'Could not reach compile API. In no-backend deployments this feature is disabled; locally, start "npm run dev:backend".'
+    );
+  }
 
   let payload = null;
   try {
@@ -660,6 +772,11 @@ async function compileRiverPackageFromUploads({
   }
 
   if (!response.ok) {
+    if (response.status === 404) {
+      throw new Error(
+        'Compile API route was not found. This deployment may be preloaded-only with no backend compile route.'
+      );
+    }
     const message = payload?.error || `${response.status} ${response.statusText}`;
     throw new Error(message);
   }
@@ -673,6 +790,11 @@ async function compileRiverPackageFromUploads({
     sonarWarning: payload.sonarWarning || '',
     elevationWarning: payload.elevationWarning || '',
   };
+}
+
+function apiUrl(pathname) {
+  if (!pathname) return API_BASE_URL || '/';
+  return API_BASE_URL ? `${API_BASE_URL}${pathname}` : pathname;
 }
 
 function buildCrossSectionsFromOverviewRows({ overviewRows, matSourceNames, riverEnvelope, riverBbox }) {
@@ -1502,13 +1624,45 @@ function pickColumn(header, candidates) {
   return -1;
 }
 
-async function openHusliaDemo() {
+function renderPreloadedRiverSpots() {
+  if (!els.preloadedRiverSpots) return;
+
+  const html = PRELOADED_RIVER_SPOTS.map((spot) => {
+    const isActive = currentPreloadedRiverId === spot.id;
+    const activeClass = isActive ? ' is-active' : '';
+    return `<button type="button" class="hud-spot-btn${activeClass}" data-river-id="${escapeHtml(spot.id)}" title="${escapeHtml(spot.description)}">${escapeHtml(spot.label)}</button>`;
+  }).join('');
+
+  els.preloadedRiverSpots.innerHTML = html;
+  const buttons = Array.from(els.preloadedRiverSpots.querySelectorAll('button[data-river-id]'));
+  for (const button of buttons) {
+    button.addEventListener('click', () => {
+      const riverId = button.getAttribute('data-river-id') || '';
+      if (!riverId) return;
+      void openPreloadedRiver(riverId);
+    });
+  }
+}
+
+async function openPreloadedRiver(riverId) {
+  const river = getPreloadedRiverById(riverId);
+  if (!river) {
+    setSetupError(`Unknown preloaded river: ${riverId}`);
+    return;
+  }
+
   clearSetupError();
   setProcessingVisible(true);
-  setProcessingText('Loading Huslia Demo', 'Opening default Huslia river package...');
+  setProcessingText(`Loading ${river.label}`, `Opening preloaded ${river.label} river package...`);
   try {
-    await loadPackageFromUrl(DEFAULT_PACKAGE_URL);
-    setStatus('Loaded default Huslia demo river.');
+    currentPreloadedRiverId = river.id;
+    renderPreloadedRiverSpots();
+    await loadPackageFromUrl(river.packageUrl);
+    const nextUrl = new URL(window.location.href);
+    nextUrl.searchParams.set('mode', 'demo');
+    nextUrl.searchParams.set('river', river.id);
+    window.history.replaceState({}, '', nextUrl);
+    setStatus(`Loaded preloaded ${river.label} river.`);
     setOnboardingVisible(false);
     if (els.startPage) {
       showOnboardingPage('start');
@@ -1516,8 +1670,8 @@ async function openHusliaDemo() {
       showOnboardingPage('setup');
     }
   } catch (err) {
-    setSetupError(`Failed to load Huslia demo: ${err?.message || String(err)}`);
-    setStatus(`Failed to load Huslia demo: ${err?.message || String(err)}`);
+    setSetupError(`Failed to load ${river.label}: ${err?.message || String(err)}`);
+    setStatus(`Failed to load ${river.label}: ${err?.message || String(err)}`);
     if (els.startPage) {
       showOnboardingPage('start');
     } else {
@@ -1943,11 +2097,11 @@ function renderLoggedAnalysesMeta() {
   if (!els.loggedAnalysesMeta) return;
   const analyses = getLoggedAnalyses();
   if (analyses.length === 0) {
-    els.loggedAnalysesMeta.textContent = 'Huslia demo ready';
+    els.loggedAnalysesMeta.textContent = '3 preloaded rivers ready (Huslia, Alakanuk, Beaver)';
     return;
   }
   const latest = analyses[0];
-  els.loggedAnalysesMeta.textContent = `${analyses.length} session${analyses.length === 1 ? '' : 's'} - Latest: ${latest.name || 'Untitled'} (Huslia demo available)`;
+  els.loggedAnalysesMeta.textContent = `${analyses.length} session${analyses.length === 1 ? '' : 's'} - Latest: ${latest.name || 'Untitled'} (plus 3 preloaded rivers)`;
 }
 
 async function loadPackageFromUrl(url) {
@@ -1967,7 +2121,7 @@ async function fetchPackageJson(url) {
 }
 
 async function mergeElevationSidecar(packageUrl, packageData) {
-  if (!packageData || packageData.elevation_raster) {
+  if (!packageData) {
     return packageData;
   }
 
@@ -1981,10 +2135,19 @@ async function mergeElevationSidecar(packageUrl, packageData) {
 
   try {
     const sidecar = await fetchPackageJson(sidecarUrl);
-    if (sidecar && typeof sidecar === 'object' && sidecar.elevation_raster) {
+    if (sidecar && typeof sidecar === 'object') {
+      const next = { ...packageData };
+      if (sidecar.elevation_raster) {
+        next.elevation_raster = sidecar.elevation_raster;
+      }
+      if (sidecar.elevation_variants && typeof sidecar.elevation_variants === 'object') {
+        next.elevation_variants = sidecar.elevation_variants;
+      }
+      if (typeof sidecar.default_elevation_key === 'string') {
+        next.default_elevation_key = sidecar.default_elevation_key;
+      }
       return {
-        ...packageData,
-        elevation_raster: sidecar.elevation_raster,
+        ...next,
       };
     }
   } catch {
@@ -1993,24 +2156,72 @@ async function mergeElevationSidecar(packageUrl, packageData) {
   return packageData;
 }
 
+function getElevationVariants(packageData) {
+  const out = {};
+  const variants = packageData?.elevation_variants;
+  if (variants && typeof variants === 'object') {
+    if (variants.geg && typeof variants.geg === 'object') out.geg = variants.geg;
+    if (variants.gef && typeof variants.gef === 'object') out.gef = variants.gef;
+  }
+  if (!out.geg && packageData?.elevation_raster && typeof packageData.elevation_raster === 'object') {
+    out.geg = packageData.elevation_raster;
+  }
+  return out;
+}
+
+function getActiveElevationRaster(packageData) {
+  const variants = getElevationVariants(packageData);
+  const preferredKey = useVegetationElevation ? 'gef' : 'geg';
+  if (variants[preferredKey]) {
+    currentElevationVariantKey = preferredKey;
+    return variants[preferredKey];
+  }
+  if (variants.geg) {
+    currentElevationVariantKey = 'geg';
+    return variants.geg;
+  }
+  if (variants.gef) {
+    currentElevationVariantKey = 'gef';
+    return variants.gef;
+  }
+  currentElevationVariantKey = '';
+  return null;
+}
+
+function updateElevationVariantToggle(packageData) {
+  if (!els.toggleVegetationTerrain) return;
+  const variants = getElevationVariants(packageData);
+  const hasGef = Boolean(variants.gef);
+  if (!hasGef) {
+    useVegetationElevation = false;
+  }
+  els.toggleVegetationTerrain.disabled = !hasGef;
+  els.toggleVegetationTerrain.checked = Boolean(useVegetationElevation && hasGef);
+}
+
 function loadPackage(data) {
   if (!data || !data.river_banks || !Array.isArray(data.river_banks.points)) {
     throw new Error('Invalid package: missing river_banks.points');
   }
 
   if (currentRiverGroup) {
+    clearMapMeasurementSegments();
     scene.remove(currentRiverGroup);
   }
 
   currentRiverGroup = new THREE.Group();
+  currentPackageData = data;
   clickableMarkers = [];
   riverVideoPickTargets = [];
+  sedimentSamplePickTargets = [];
   curtainMeshes = [];
   bankMigrationArrowLayer = null;
+  sedimentSampleLayer = null;
   selectedSection = null;
   sheetRows = [];
   measurementRows = [];
   measurementRowSeq = 0;
+  mapMeasurementSegments = [];
   crossSectionNotesByKey = new Map();
   setMeasurementMode(false);
   renderSheetTable();
@@ -2020,6 +2231,9 @@ function loadPackage(data) {
     x: meanOrZero(bbox.min_x, bbox.max_x),
     y: meanOrZero(bbox.min_y, bbox.max_y),
   };
+  const matchedPreloaded = getPreloadedRiverById(data.river_id);
+  currentPreloadedRiverId = matchedPreloaded?.id || null;
+  renderPreloadedRiverSpots();
 
   const bankPoints = data.river_banks.points;
   const bankPointCloud = buildBankPointCloud(bankPoints);
@@ -2033,8 +2247,20 @@ function loadPackage(data) {
   if (riverVideoGroup) {
     currentRiverGroup.add(riverVideoGroup);
   }
+  const sedimentSamples = parseSedimentSamples(data?.sediment_samples || []);
+  const sedimentLayer = buildSedimentSampleLayer(sedimentSamples);
+  if (sedimentLayer) {
+    sedimentSampleLayer = sedimentLayer;
+    sedimentSampleLayer.visible = showSedimentSamples;
+    currentRiverGroup.add(sedimentSampleLayer);
+  }
+  if (els.toggleSedimentSamples) {
+    els.toggleSedimentSamples.disabled = sedimentSamples.length === 0;
+    els.toggleSedimentSamples.checked = sedimentSamples.length > 0 && showSedimentSamples;
+  }
   const riverEnvelope = buildRiverEnvelopeFromBankPoints(bankPoints);
-  const elevationRaster = data.elevation_raster || null;
+  updateElevationVariantToggle(data);
+  const elevationRaster = getActiveElevationRaster(data);
   if (elevationRaster) {
     const elevationMesh = buildElevationTerrainMesh(elevationRaster);
     if (elevationMesh) {
@@ -2070,6 +2296,7 @@ function loadPackage(data) {
   const mappedCount = (data.cross_sections || []).filter((s) => s.line?.has_geometry).length;
   const videoCameraCount = riverVideoPickTargets.length;
   const sonarCount = sonarBottomPoints.length;
+  const sedimentCount = sedimentSamples.length;
   const elevationSampleRows = Number(data.elevation_raster?.sample?.rows) || 0;
   const elevationSampleCols = Number(data.elevation_raster?.sample?.cols) || 0;
   const elevationCellCount = elevationSampleRows > 0 && elevationSampleCols > 0
@@ -2079,8 +2306,9 @@ function loadPackage(data) {
   els.riverName.textContent = riverName;
   const sonarLabel = sonarCount > 0 ? `, ${sonarCount.toLocaleString()} sonar bottom points` : '';
   const videoLabel = videoCameraCount > 0 ? `, ${videoCameraCount} river video cameras` : '';
+  const sedimentLabel = sedimentCount > 0 ? `, ${sedimentCount.toLocaleString()} sediment samples` : '';
   const elevationLabel = elevationCellCount > 0 ? `, ${elevationCellCount.toLocaleString()} elevation cells` : '';
-  els.counts.textContent = `${bankPoints.length.toLocaleString()} bank points, ${mappedCount}/${sectionCount} mapped cross-sections${videoLabel}${sonarLabel}${elevationLabel}`;
+  els.counts.textContent = `${bankPoints.length.toLocaleString()} bank points, ${mappedCount}/${sectionCount} mapped cross-sections${videoLabel}${sonarLabel}${sedimentLabel}${elevationLabel}`;
   els.details.innerHTML = '<p>Click a cross-section marker to view a MATLAB-style cross-section plot and metadata.</p>';
   setCurtainVisibility(showColoredCrossSections);
   closeDetailsPanel();
@@ -2112,7 +2340,7 @@ function buildBankPointCloud(points) {
 
     positions.push(x, y, z);
 
-    const color = new THREE.Color(isOuter === 1 ? 0xd9d9d9 : 0x8c8c8c);
+    const color = new THREE.Color(isOuter === 1 ? 0x7dc8ff : 0x2d7fb8);
     if (isErosion === 1) {
       color.offsetHSL(0, 0, 0.08);
     }
@@ -2450,9 +2678,11 @@ function buildElevationTerrainMesh(elevationRaster) {
       vertexIndex[r][c] = vertex;
       positions.push(x, y, z);
 
-      // Color terrain by elevation with a high-contrast topographic ramp.
+      // Color terrain by elevation with an earth-like topographic ramp.
       const t = clamp((elevation - clipLow) / clipRange, 0, 1);
-      const color = colorFromTopographicRamp(t);
+      const color = useEarthTerrainColors
+        ? colorFromEarthTopographicRamp(t)
+        : colorFromBlueTopographicRamp(t);
       colors.push(color.r, color.g, color.b);
     }
   }
@@ -2491,17 +2721,21 @@ function buildElevationTerrainMesh(elevationRaster) {
   });
 
   const terrain = new THREE.Mesh(geometry, material);
+  terrain.userData.objectType = 'elevation-terrain';
   terrain.renderOrder = -1;
   return terrain;
 }
 
-function colorFromTopographicRamp(t) {
+function colorFromEarthTopographicRamp(t) {
   const stops = [
-    { t: 0.0, hex: 0x1d4e89 },  // low: blue
-    { t: 0.3, hex: 0x2a9d8f },  // teal
-    { t: 0.55, hex: 0x7cb342 }, // green
-    { t: 0.78, hex: 0xc9a66b }, // tan
-    { t: 1.0, hex: 0xf2efe6 },  // high: light
+    { t: 0.00, hex: 0x234a9f }, // deep water
+    { t: 0.12, hex: 0x3f74b5 }, // shallow water
+    { t: 0.20, hex: 0xcbb98a }, // sand / banks
+    { t: 0.42, hex: 0x6b9f52 }, // lowland vegetation
+    { t: 0.65, hex: 0x4f7f3f }, // denser vegetation
+    { t: 0.82, hex: 0x8b6a4b }, // upland / rock
+    { t: 0.94, hex: 0xaca396 }, // high rocky terrain
+    { t: 1.00, hex: 0xf0ece2 }, // highest peaks
   ];
 
   const u = clamp(t, 0, 1);
@@ -2514,6 +2748,41 @@ function colorFromTopographicRamp(t) {
   }
 
   return new THREE.Color(stops[stops.length - 1].hex);
+}
+
+function colorFromBlueTopographicRamp(t) {
+  const stops = [
+    { t: 0.0, hex: 0x0e3158 },
+    { t: 0.28, hex: 0x1e5f96 },
+    { t: 0.58, hex: 0x2d92ce },
+    { t: 0.82, hex: 0x5fc8f3 },
+    { t: 1.0, hex: 0xb5ecff },
+  ];
+
+  const u = clamp(t, 0, 1);
+  for (let i = 1; i < stops.length; i++) {
+    const a = stops[i - 1];
+    const b = stops[i];
+    if (u > b.t) continue;
+    const localT = (u - a.t) / Math.max(1e-6, b.t - a.t);
+    return new THREE.Color(a.hex).lerp(new THREE.Color(b.hex), localT);
+  }
+
+  return new THREE.Color(stops[stops.length - 1].hex);
+}
+
+function rebuildElevationTerrainMesh() {
+  if (!currentRiverGroup) return;
+  currentRiverGroup.children
+    .filter((child) => child?.userData?.objectType === 'elevation-terrain')
+    .forEach((mesh) => currentRiverGroup.remove(mesh));
+
+  const elevationRaster = getActiveElevationRaster(currentPackageData);
+  if (!elevationRaster) return;
+  const elevationMesh = buildElevationTerrainMesh(elevationRaster);
+  if (elevationMesh) {
+    currentRiverGroup.add(elevationMesh);
+  }
 }
 
 function buildSonarBottomSurfaceFromBanks(sonarBottom, riverEnvelope, depthCalibration) {
@@ -3207,7 +3476,7 @@ function parseSonarPoints(rawPoints) {
 function buildCrossSections(sections) {
   const group = new THREE.Group();
 
-  const lineMaterial = new THREE.LineBasicMaterial({ color: 0xffe08a, transparent: true, opacity: 0.6 });
+  const lineMaterial = new THREE.LineBasicMaterial({ color: 0x8dd8ff, transparent: true, opacity: 0.72 });
   const curtainMaterial = new THREE.MeshBasicMaterial({
     vertexColors: true,
     side: THREE.DoubleSide,
@@ -3247,8 +3516,8 @@ function buildCrossSections(sections) {
     const cz = (sz + ez) / 2;
 
     const markerMaterial = new THREE.MeshStandardMaterial({
-      color: 0xffc74f,
-      emissive: 0x241a07,
+      color: 0x56c3ff,
+      emissive: 0x061d35,
       roughness: 0.45,
       metalness: 0.05,
     });
@@ -3330,7 +3599,7 @@ function buildRiverVideoIcons(bankPoints) {
       new THREE.Vector3(iconX, iconY - 8, iconZ),
     ]);
     const stemMaterial = new THREE.LineBasicMaterial({
-      color: 0xff6576,
+      color: 0x63caff,
       transparent: true,
       opacity: 0.74,
     });
@@ -3339,6 +3608,104 @@ function buildRiverVideoIcons(bankPoints) {
   }
 
   return riverVideoPickTargets.length > 0 ? group : null;
+}
+
+function parseSedimentSamples(rawSamples) {
+  if (!Array.isArray(rawSamples)) return [];
+
+  const out = [];
+  for (let i = 0; i < rawSamples.length; i++) {
+    const sample = rawSamples[i];
+    if (Array.isArray(sample) && sample.length >= 2) {
+      const x = Number(sample[0]);
+      const y = Number(sample[1]);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+      out.push({
+        id: i + 1,
+        x,
+        y,
+        date: '',
+        description: '',
+        grainSizeDistribution: [],
+      });
+      continue;
+    }
+    if (!sample || typeof sample !== 'object') continue;
+
+    const x = firstFiniteNumberFromSample(sample, ['x', 'map_x', 'easting']);
+    const y = firstFiniteNumberFromSample(sample, ['y', 'map_y', 'northing']);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+
+    out.push({
+      id: sample.id ?? (i + 1),
+      x,
+      y,
+      date: String(sample.date || sample.sample_date || sample.collected_at || '').trim(),
+      description: String(sample.description || sample.notes || sample.label || '').trim(),
+      grainSizeDistribution: normalizeGrainSizeDistribution(sample.grain_size_distribution || sample.grainSizeDistribution),
+    });
+  }
+  return out;
+}
+
+function firstFiniteNumberFromSample(sample, keys) {
+  for (const key of keys) {
+    const value = Number(sample?.[key]);
+    if (Number.isFinite(value)) return value;
+  }
+  return NaN;
+}
+
+function normalizeGrainSizeDistribution(raw) {
+  if (!Array.isArray(raw)) return [];
+  const out = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const size = Number(item.size ?? item.bin ?? item.class ?? item.diameter_mm);
+    const pct = Number(item.percent ?? item.pct ?? item.fraction ?? item.value);
+    if (!Number.isFinite(size) || !Number.isFinite(pct)) continue;
+    out.push({ size, percent: pct });
+  }
+  return out.sort((a, b) => a.size - b.size);
+}
+
+function buildSedimentSampleLayer(samples) {
+  if (!Array.isArray(samples) || samples.length === 0) return null;
+
+  const group = new THREE.Group();
+  const markerGeometry = new THREE.SphereGeometry(7, 14, 10);
+  const stemMaterial = new THREE.LineBasicMaterial({
+    color: 0xe0c97a,
+    transparent: true,
+    opacity: 0.68,
+  });
+
+  for (const sample of samples) {
+    const markerMaterial = new THREE.MeshStandardMaterial({
+      color: 0xf8d371,
+      emissive: 0x2a1d02,
+      roughness: 0.45,
+      metalness: 0.06,
+    });
+
+    const marker = new THREE.Mesh(markerGeometry, markerMaterial);
+    const sx = Number(sample.x) - worldCenter.x;
+    const sz = Number(sample.y) - worldCenter.y;
+    marker.position.set(sx, 12, sz);
+    marker.userData = { ...sample, objectType: 'sediment-sample' };
+    marker.name = `sediment-sample-${sample.id}`;
+    sedimentSamplePickTargets.push(marker);
+    group.add(marker);
+
+    const stemGeometry = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(sx, 1.5, sz),
+      new THREE.Vector3(sx, 9, sz),
+    ]);
+    const stem = new THREE.Line(stemGeometry, stemMaterial);
+    group.add(stem);
+  }
+
+  return group;
 }
 
 function pickRiverVideoAnchorPoint(points, yTarget, minX, maxX, sideSign) {
@@ -3365,7 +3732,7 @@ function createVideoBadgeSprite() {
   canvas.height = size;
   const ctx = canvas.getContext('2d');
   if (!ctx) {
-    const fallback = new THREE.Sprite(new THREE.SpriteMaterial({ color: 0xff3030 }));
+    const fallback = new THREE.Sprite(new THREE.SpriteMaterial({ color: 0x4ec4ff }));
     fallback.scale.set(28, 28, 1);
     fallback.renderOrder = 12;
     return fallback;
@@ -3376,12 +3743,12 @@ function createVideoBadgeSprite() {
   const radius = size * 0.34;
 
   ctx.clearRect(0, 0, size, size);
-  ctx.fillStyle = 'rgba(255, 46, 56, 0.96)';
+  ctx.fillStyle = 'rgba(52, 176, 236, 0.96)';
   ctx.beginPath();
   ctx.arc(cx, cy, radius, 0, Math.PI * 2);
   ctx.fill();
 
-  ctx.strokeStyle = 'rgba(255, 200, 206, 0.85)';
+  ctx.strokeStyle = 'rgba(183, 234, 255, 0.9)';
   ctx.lineWidth = 6;
   ctx.beginPath();
   ctx.arc(cx, cy, radius - 2, 0, Math.PI * 2);
@@ -3554,7 +3921,7 @@ function onPointerDown(event) {
   mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
 
   raycaster.setFromCamera(mouse, camera);
-  const pickTargets = [...clickableMarkers, ...riverVideoPickTargets];
+  const pickTargets = [...clickableMarkers, ...riverVideoPickTargets, ...sedimentSamplePickTargets];
   if (bankMigrationArrowLayer) pickTargets.push(bankMigrationArrowLayer);
   const hits = raycaster.intersectObjects(pickTargets, false);
 
@@ -3575,6 +3942,13 @@ function onPointerDown(event) {
   const objectType = hit?.userData?.objectType;
   if (objectType === 'river-video-site') {
     if (renderRiverVideoDetails(hit.userData)) {
+      openDetailsPanel();
+    }
+    return;
+  }
+  if (objectType === 'sediment-sample') {
+    highlightMarker(hit);
+    if (renderSedimentSampleDetails(hit.userData)) {
       openDetailsPanel();
     }
     return;
@@ -3708,6 +4082,62 @@ function clearMeasurementVisual() {
   hideMeasurementReadout();
 }
 
+function createPersistentMapMeasurementLine(row) {
+  const lineY = getGroundReferenceY() + 3;
+  const geometry = new THREE.BufferGeometry().setFromPoints([
+    new THREE.Vector3(row.startX, lineY, row.startY),
+    new THREE.Vector3(row.endX, lineY, row.endY),
+  ]);
+  const material = new THREE.LineBasicMaterial({
+    color: 0x8cf6ff,
+    transparent: true,
+    opacity: 0.92,
+    depthWrite: false,
+  });
+  const line = new THREE.Line(geometry, material);
+  line.renderOrder = 7;
+  return line;
+}
+
+function setMapMeasurementHighlight(id) {
+  mapMeasurementSegments.forEach((segment) => {
+    const isActive = Number(segment?.rowId) === Number(id);
+    segment.mesh.material.color.setHex(isActive ? 0xffd166 : 0x8cf6ff);
+    segment.mesh.material.opacity = isActive ? 0.98 : 0.88;
+  });
+}
+
+function clearMapMeasurementSegments() {
+  mapMeasurementSegments.forEach((segment) => {
+    if (segment?.mesh && currentRiverGroup) {
+      currentRiverGroup.remove(segment.mesh);
+    }
+  });
+  mapMeasurementSegments = [];
+}
+
+function removeMapMeasurementSegmentById(id) {
+  const target = mapMeasurementSegments.find((segment) => Number(segment.rowId) === Number(id));
+  if (target?.mesh && currentRiverGroup) {
+    currentRiverGroup.remove(target.mesh);
+  }
+  mapMeasurementSegments = mapMeasurementSegments.filter((segment) => Number(segment.rowId) !== Number(id));
+}
+
+function focusMapMeasurement(row) {
+  if (!row) return;
+  const center = new THREE.Vector3(
+    (row.startX + row.endX) * 0.5,
+    getGroundReferenceY() + 2.5,
+    (row.startY + row.endY) * 0.5
+  );
+  controls.target.copy(center);
+  camera.position.set(center.x + 230, center.y + 180, center.z + 230);
+  controls.update();
+  setMapMeasurementHighlight(row.id);
+  setStatus(`Focused measurement ${row.id}.`);
+}
+
 function showMeasurementReadout(screenX, screenY, text) {
   if (!els.measureReadout) return;
   els.measureReadout.textContent = text;
@@ -3778,7 +4208,10 @@ function renderMigrationArrowDetails(hit) {
 
 function highlightMarker(active) {
   clickableMarkers.forEach((marker) => {
-    marker.material.color.setHex(marker === active ? 0xff8f2e : 0xffc74f);
+    marker.material.color.setHex(marker === active ? 0x8ce8ff : 0x56c3ff);
+  });
+  sedimentSamplePickTargets.forEach((marker) => {
+    marker.material.color.setHex(marker === active ? 0xffefac : 0xf8d371);
   });
 }
 
@@ -3817,6 +4250,98 @@ function renderRiverVideoDetails(videoSiteData) {
     </div>
   `;
   return true;
+}
+
+function renderSedimentSampleDetails(sampleData) {
+  if (!sampleData) return false;
+
+  selectedSection = null;
+  destroyCrossSectionInteractivePlot();
+
+  const grainPlot = buildSedimentGrainSizePlot(sampleData.grainSizeDistribution || []);
+  const sampleDate = sampleData.date || 'NA';
+  const sampleDescription = sampleData.description || 'No description provided.';
+
+  els.details.innerHTML = `
+    <div class="cross-section-workspace">
+      <section class="cs-card cs-metrics-card">
+        <div class="cs-card-head">
+          <div>
+            <h4 class="cs-card-title">Sediment Sample</h4>
+            <p class="cs-card-subtitle">Sample ${escapeHtml(String(sampleData.id))}</p>
+          </div>
+          <span class="cs-chip">sediment</span>
+        </div>
+        <div class="cs-metrics-grid">
+          <article class="cs-metric-card">
+            <span class="cs-metric-label">Date</span>
+            <strong class="cs-metric-value">${escapeHtml(sampleDate)}</strong>
+          </article>
+          <article class="cs-metric-card">
+            <span class="cs-metric-label">Location (x, y)</span>
+            <strong class="cs-metric-value">${escapeHtml(`${formatNum(sampleData.x)}, ${formatNum(sampleData.y)}`)}</strong>
+          </article>
+          <article class="cs-metric-card">
+            <span class="cs-metric-label">Description</span>
+            <strong class="cs-metric-value">${escapeHtml(sampleDescription)}</strong>
+          </article>
+        </div>
+        <div style="margin-top:10px;">
+          ${grainPlot}
+        </div>
+      </section>
+    </div>
+  `;
+  return true;
+}
+
+function buildSedimentGrainSizePlot(distribution) {
+  if (!Array.isArray(distribution) || distribution.length === 0) {
+    return '<p class="cs-empty">No grain size distribution available for this sample.</p>';
+  }
+
+  const values = distribution
+    .map((item) => ({
+      size: Number(item.size),
+      percent: Number(item.percent),
+    }))
+    .filter((item) => Number.isFinite(item.size) && Number.isFinite(item.percent));
+  if (values.length === 0) {
+    return '<p class="cs-empty">No grain size distribution available for this sample.</p>';
+  }
+
+  const maxPct = Math.max(...values.map((item) => item.percent), 1);
+  const width = 560;
+  const height = 220;
+  const left = 42;
+  const right = 20;
+  const top = 20;
+  const bottom = 28;
+  const plotW = width - left - right;
+  const plotH = height - top - bottom;
+
+  const minSize = values[0].size;
+  const maxSize = values[values.length - 1].size;
+  const span = Math.max(1e-6, maxSize - minSize);
+
+  const bars = values.map((item) => {
+    const x = left + ((item.size - minSize) / span) * plotW;
+    const barW = Math.max(2, plotW / Math.max(20, values.length * 1.5));
+    const barH = (item.percent / maxPct) * plotH;
+    const y = top + plotH - barH;
+    return `<rect x="${x.toFixed(2)}" y="${y.toFixed(2)}" width="${barW.toFixed(2)}" height="${barH.toFixed(2)}" fill="#8fd6ff"></rect>`;
+  }).join('');
+
+  return `
+    <div class="cs-profile-figure">
+      <svg class="cs-profile-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" aria-label="Grain size distribution">
+        <rect x="${left}" y="${top}" width="${plotW}" height="${plotH}" fill="rgba(5,21,39,0.55)" stroke="rgba(120,196,255,0.35)"></rect>
+        ${bars}
+        <text x="${left + plotW / 2}" y="${height - 6}" class="cs-profile-label" text-anchor="middle">Grain size class</text>
+        <text x="8" y="${top + plotH / 2}" class="cs-profile-label">% Fraction</text>
+      </svg>
+    </div>
+  `;
 }
 
 function renderCrossSectionDetails(section) {
@@ -4231,6 +4756,7 @@ function renderSheetTable() {
   }
 
   if (measurementCount === 0) {
+    setMapMeasurementHighlight(null);
     els.measurementTableWrap.innerHTML = '<p class="sheet-empty">Use the ruler tool, click-drag on the map, and each measurement is saved here.</p>';
     return;
   }
@@ -4245,6 +4771,7 @@ function renderSheetTable() {
         <th>disp_y</th>
         <th>Start (x, y)</th>
         <th>End (x, y)</th>
+        <th>Actions</th>
       </tr>
     </thead>
   `;
@@ -4257,10 +4784,27 @@ function renderSheetTable() {
       <td>${escapeHtml(formatNum(row.dispY))}</td>
       <td>${escapeHtml(`${formatNum(row.startX)}, ${formatNum(row.startY)}`)}</td>
       <td>${escapeHtml(`${formatNum(row.endX)}, ${formatNum(row.endY)}`)}</td>
+      <td>
+        <button type="button" class="inline-btn" data-measure-action="focus" data-measure-id="${row.id}">Focus</button>
+        <button type="button" class="inline-btn" data-measure-action="delete" data-measure-id="${row.id}">Delete</button>
+      </td>
     </tr>
   `).join('');
 
   els.measurementTableWrap.innerHTML = `<table class="sheet-table">${measurementHead}<tbody>${measurementBody}</tbody></table>`;
+  els.measurementTableWrap.querySelectorAll('[data-measure-action]').forEach((button) => {
+    const id = Number(button.getAttribute('data-measure-id'));
+    const action = button.getAttribute('data-measure-action');
+    button.addEventListener('click', () => {
+      const row = measurementRows.find((item) => Number(item.id) === id);
+      if (!row) return;
+      if (action === 'delete') {
+        deleteMapMeasurementRow(id);
+      } else if (action === 'focus') {
+        focusMapMeasurement(row);
+      }
+    });
+  });
 }
 
 function setSheetPanelVisible(visible) {
@@ -4273,13 +4817,74 @@ function setSheetPanelVisible(visible) {
   }
 }
 
+function deleteMapMeasurementRow(id) {
+  measurementRows = measurementRows.filter((row) => Number(row.id) !== Number(id));
+  removeMapMeasurementSegmentById(id);
+  renderSheetTable();
+  setStatus(`Removed measurement ${id}.`);
+}
+
+function exportSheetTablesCsv() {
+  if (measurementRows.length === 0 && sheetRows.length === 0) {
+    setStatus('No rows to export yet.');
+    return;
+  }
+
+  const head = measurementRows.length > 0
+    ? ['id', 'measured_at', 'distance_m', 'disp_x', 'disp_y', 'start_x', 'start_y', 'end_x', 'end_y']
+    : ['mat_file', 'transect', 'date', 'time_local', 'q_m3s', 'top_width_m', 'mean_velocity_ms', 'grid_u_mean_ms', 'bed_mean_z', 'note'];
+  const rows = measurementRows.length > 0
+    ? measurementRows.map((row) => [
+      row.id,
+      row.measuredAt,
+      row.distance,
+      row.dispX,
+      row.dispY,
+      row.startX,
+      row.startY,
+      row.endX,
+      row.endY,
+    ])
+    : sheetRows.map((row) => [
+      row.matFile,
+      row.transect,
+      row.date,
+      row.timeLocal,
+      row.q,
+      row.topWidth,
+      row.meanVelocity,
+      row.velocityMeanGrid,
+      row.bedMean,
+      row.note || '',
+    ]);
+  const csv = [head, ...rows]
+    .map((cells) => cells.map((value) => csvEscape(value)).join(','))
+    .join('\n');
+
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(blob);
+  link.download = measurementRows.length > 0 ? 'map_measurements.csv' : 'cross_sections.csv';
+  link.click();
+  URL.revokeObjectURL(link.href);
+  setStatus(measurementRows.length > 0 ? 'Exported map measurements to CSV.' : 'Exported cross-sections to CSV.');
+}
+
+function csvEscape(value) {
+  const text = String(value ?? '');
+  if (/[",\n]/.test(text)) {
+    return `"${text.replace(/"/g, '""')}"`;
+  }
+  return text;
+}
+
 function addMeasurementToSheet({ distance, start, end }) {
   if (!Number.isFinite(distance) || !start || !end) return;
   const dispX = end.x - start.x;
   const dispY = end.z - start.z;
 
   measurementRowSeq += 1;
-  measurementRows.push({
+  const row = {
     id: measurementRowSeq,
     measuredAt: new Date().toLocaleString(),
     distance,
@@ -4289,7 +4894,15 @@ function addMeasurementToSheet({ distance, start, end }) {
     startY: start.z,
     endX: end.x,
     endY: end.z,
-  });
+  };
+  measurementRows.push(row);
+
+  if (currentRiverGroup) {
+    const mesh = createPersistentMapMeasurementLine(row);
+    currentRiverGroup.add(mesh);
+    mapMeasurementSegments.push({ rowId: row.id, mesh });
+    setMapMeasurementHighlight(row.id);
+  }
 
   renderSheetTable();
 }
@@ -4432,7 +5045,7 @@ function getGroundReferenceY() {
 function createGroundBasePlane({ center, y, size }) {
   const geometry = new THREE.PlaneGeometry(size, size, 1, 1);
   const material = new THREE.MeshStandardMaterial({
-    color: 0x2c2c2c,
+    color: 0x0f2b47,
     roughness: 0.98,
     metalness: 0.0,
     depthWrite: false,

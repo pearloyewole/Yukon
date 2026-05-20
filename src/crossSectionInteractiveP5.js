@@ -2,6 +2,20 @@ import p5 from 'p5';
 
 let activePanel = null;
 const MIN_CANVAS_WIDTH = 280;
+const MEASUREMENT_COLORS = [
+  '#6EC5FF',
+  '#56B36B',
+  '#2F3A8F',
+  '#DC4A7D',
+  '#E39B3D',
+  '#B58CFF',
+];
+const FIELD_OPTIONS = [
+  { key: 'streamwise', label: 'Streamwise velocity (m/s)' },
+  { key: 'total', label: 'Total velocity (m/s)' },
+  { key: 'shear', label: 'Shear velocity (total) (m/s)' },
+  { key: 'crosswise', label: 'Cross-wise velocity (m/s)' },
+];
 
 export function mountCrossSectionInteractivePlot(container, section) {
   destroyCrossSectionInteractivePlot();
@@ -20,20 +34,33 @@ export function mountCrossSectionInteractivePlot(container, section) {
 
   const rows = velocityGrid.length;
   const cols = velocityGrid[0].length;
-  const [vMin, vMax] = findVelocityRange(velocityGrid, maskGrid);
-  const depthAveraged = buildDepthAveragedVelocity(velocityGrid, maskGrid);
+  const fieldGrids = buildFieldGrids(velocityGrid, maskGrid);
+  const fieldMeta = buildFieldMeta(fieldGrids, maskGrid);
+  const activeFieldKey = fieldMeta.streamwise ? 'streamwise' : Object.keys(fieldMeta)[0];
+  const activeField = fieldMeta[activeFieldKey];
 
   const state = {
     section,
+    baseVelocityGrid: velocityGrid,
     velocityGrid,
     maskGrid,
     rows,
     cols,
-    vMin,
-    vMax,
-    depthAveraged,
+    depthStepM: estimateDepthStepMeters(section, rows),
+    fieldGrids,
+    fieldMeta,
+    activeFieldKey,
+    vMin: activeField.vMin,
+    vMax: activeField.vMax,
+    depthAveraged: buildDepthAveragedVelocity(activeField.grid, maskGrid),
+    showCrosswiseArrows: true,
     selectedRow: clamp(Math.floor(rows * 0.42), 0, rows - 1),
     selectedCol: clamp(Math.floor(cols * 0.5), 0, cols - 1),
+    measurementMode: false,
+    measurementDraft: null,
+    measurements: [],
+    measurementSeq: 0,
+    selectedMeasurementId: null,
   };
 
   container.innerHTML = `
@@ -43,6 +70,19 @@ export function mountCrossSectionInteractivePlot(container, section) {
           <h4 class="plot-title">Velocity Cross-Section (Hover to inspect)</h4>
           <div class="plot-readout" data-heat-readout></div>
         </div>
+        <div class="plot-controls">
+          <label class="plot-control">
+            <span>Field</span>
+            <select data-field-select>
+              ${FIELD_OPTIONS.map((item) => `<option value="${item.key}">${escapeHtml(item.label)}</option>`).join('')}
+            </select>
+          </label>
+          <label class="plot-control plot-control-check">
+            <input data-arrow-toggle type="checkbox" checked />
+            Show cross-wise arrows
+          </label>
+        </div>
+        <p class="plot-hint">Cross-wise and shear fields are prototype-derived from the available velocity grid.</p>
         <div data-heat-host class="cross-p5-host cross-p5-host-heat"></div>
       </section>
 
@@ -62,6 +102,20 @@ export function mountCrossSectionInteractivePlot(container, section) {
         <p class="plot-hint">Drag the vertical cursor left/right to explore values.</p>
         <div data-stream-host class="cross-p5-host cross-p5-host-stream"></div>
       </section>
+
+      <section class="plot-panel">
+        <div class="plot-head">
+          <h4 class="plot-title">Cross-Section Measurements</h4>
+          <div class="plot-readout" data-measure-readout>No measurements yet</div>
+        </div>
+        <div class="measure-toolbar">
+          <button type="button" data-measure-toggle>Start measurement mode</button>
+          <button type="button" data-measure-clear>Clear all</button>
+          <button type="button" data-measure-export>Export to Excel</button>
+        </div>
+        <div data-measure-list class="measure-list"></div>
+        <div data-measure-profile-host class="cross-p5-host cross-p5-host-measure"></div>
+      </section>
     </div>
   `;
 
@@ -69,9 +123,17 @@ export function mountCrossSectionInteractivePlot(container, section) {
     heatReadout: container.querySelector('[data-heat-readout]'),
     rowReadout: container.querySelector('[data-row-readout]'),
     streamReadout: container.querySelector('[data-stream-readout]'),
+    measureReadout: container.querySelector('[data-measure-readout]'),
     heatHost: container.querySelector('[data-heat-host]'),
     rowHost: container.querySelector('[data-row-host]'),
     streamHost: container.querySelector('[data-stream-host]'),
+    measureToggleBtn: container.querySelector('[data-measure-toggle]'),
+    measureClearBtn: container.querySelector('[data-measure-clear]'),
+    measureExportBtn: container.querySelector('[data-measure-export]'),
+    fieldSelect: container.querySelector('[data-field-select]'),
+    arrowToggle: container.querySelector('[data-arrow-toggle]'),
+    measureList: container.querySelector('[data-measure-list]'),
+    measureProfileHost: container.querySelector('[data-measure-profile-host]'),
   };
 
   const redrawAll = () => {
@@ -79,7 +141,9 @@ export function mountCrossSectionInteractivePlot(container, section) {
     activePanel.instances.heat?.redraw();
     activePanel.instances.row?.redraw();
     activePanel.instances.stream?.redraw();
+    activePanel.instances.measure?.redraw();
     updateReadouts();
+    updateMeasurementsUi();
   };
 
   const setSelection = (row, col) => {
@@ -99,9 +163,10 @@ export function mountCrossSectionInteractivePlot(container, section) {
     const cellV = Number(state.velocityGrid[row][col]);
     const wet = isWater(state.maskGrid, state.velocityGrid, row, col);
 
+    const fieldLabel = state.fieldMeta[state.activeFieldKey]?.label || 'Velocity';
     refs.heatReadout.textContent = wet && Number.isFinite(cellV)
-      ? `row ${row + 1}, col ${col + 1}: ${formatNumber(cellV)} m/s`
-      : `row ${row + 1}, col ${col + 1}: dry/no-data`;
+      ? `${fieldLabel} at row ${row + 1}, col ${col + 1}: ${formatNumber(cellV)} m/s`
+      : `${fieldLabel} at row ${row + 1}, col ${col + 1}: dry/no-data`;
 
     const rowStats = summarizeRow(state.velocityGrid, state.maskGrid, row);
     refs.rowReadout.textContent = rowStats.count > 0
@@ -109,14 +174,124 @@ export function mountCrossSectionInteractivePlot(container, section) {
       : `row ${row + 1}: no wet cells`;
 
     const streamVal = state.depthAveraged[col];
+    const depthAvgLabel = state.fieldMeta[state.activeFieldKey]?.label || 'Velocity';
     refs.streamReadout.textContent = Number.isFinite(streamVal)
-      ? `cursor col ${col + 1}: ${formatNumber(streamVal)} m/s`
-      : `cursor col ${col + 1}: no-data`;
+      ? `${depthAvgLabel}, cursor col ${col + 1}: ${formatNumber(streamVal)} m/s`
+      : `${depthAvgLabel}, cursor col ${col + 1}: no-data`;
+
+    refs.measureReadout.textContent = state.measurements.length > 0
+      ? `${state.measurements.length} line(s) collected`
+      : 'No measurements yet';
   };
 
-  const heatPlot = createHeatmapPlot(refs.heatHost, state, setSelection);
+  const setActiveField = (fieldKey) => {
+    const nextField = state.fieldMeta[fieldKey];
+    if (!nextField) return;
+
+    state.activeFieldKey = fieldKey;
+    state.velocityGrid = nextField.grid;
+    state.vMin = nextField.vMin;
+    state.vMax = nextField.vMax;
+    state.depthAveraged = buildDepthAveragedVelocity(nextField.grid, state.maskGrid);
+    redrawAll();
+  };
+
+  const addMeasurement = (start, end) => {
+    if (Math.hypot(end.col - start.col, end.row - start.row) < 0.8) return false;
+    const samples = sampleMeasurementLine(state, start, end);
+    if (samples.length < 2) return false;
+
+    state.measurementSeq += 1;
+    const id = state.measurementSeq;
+    state.measurements.push({
+      id,
+      label: `M${id}`,
+      color: MEASUREMENT_COLORS[(id - 1) % MEASUREMENT_COLORS.length],
+      fieldKey: state.activeFieldKey,
+      fieldLabel: state.fieldMeta[state.activeFieldKey]?.label || 'Velocity',
+      start,
+      end,
+      samples,
+    });
+    state.selectedMeasurementId = id;
+    redrawAll();
+    return true;
+  };
+
+  const setMeasurementDraft = (start, end) => {
+    if (!start || !end) {
+      state.measurementDraft = null;
+      return;
+    }
+    state.measurementDraft = { start, end };
+  };
+
+  const heatPlot = createHeatmapPlot(refs.heatHost, state, setSelection, addMeasurement, setMeasurementDraft);
   const rowPlot = createRowProfilePlot(refs.rowHost, state, setSelection);
   const streamPlot = createDepthAveragedPlot(refs.streamHost, state, setSelection);
+  const measurePlot = createMeasurementProfilePlot(refs.measureProfileHost, state);
+
+  refs.measureToggleBtn?.addEventListener('click', () => {
+    state.measurementMode = !state.measurementMode;
+    state.measurementDraft = null;
+    redrawAll();
+  });
+
+  refs.measureClearBtn?.addEventListener('click', () => {
+    state.measurements = [];
+    state.selectedMeasurementId = null;
+    state.measurementDraft = null;
+    redrawAll();
+  });
+
+  refs.measureExportBtn?.addEventListener('click', () => {
+    if (state.measurements.length === 0) return;
+    exportMeasurementsWorkbook(state, section?.transect || section?.mat_file || 'cross_section');
+  });
+
+  refs.fieldSelect?.addEventListener('change', () => {
+    setActiveField(refs.fieldSelect.value);
+  });
+
+  refs.arrowToggle?.addEventListener('change', () => {
+    state.showCrosswiseArrows = Boolean(refs.arrowToggle.checked);
+    redrawAll();
+  });
+
+  const updateMeasurementsUi = () => {
+    if (!refs.measureList) return;
+    refs.measureToggleBtn.textContent = state.measurementMode ? 'Stop measurement mode' : 'Start measurement mode';
+    refs.measureToggleBtn.classList.toggle('is-active', state.measurementMode);
+
+    if (state.measurements.length === 0) {
+      refs.measureList.innerHTML = '<p class="plot-hint">Enable measurement mode, then click-drag on the heatmap to capture a line.</p>';
+      return;
+    }
+
+    refs.measureList.innerHTML = state.measurements.map((m) => `
+      <div class="measure-item ${m.id === state.selectedMeasurementId ? 'is-selected' : ''}" data-measure-id="${m.id}">
+        <span class="measure-swatch" style="background:${escapeHtml(m.color)}"></span>
+        <button type="button" class="measure-select">${escapeHtml(m.label)}</button>
+        <span class="measure-meta">${escapeHtml(m.fieldLabel)} • ${formatNumber(measurementLength(m))} m • ${m.samples.length} samples</span>
+        <button type="button" class="measure-delete" data-action="delete">Remove</button>
+      </div>
+    `).join('');
+
+    refs.measureList.querySelectorAll('[data-measure-id]').forEach((item) => {
+      const id = Number(item.getAttribute('data-measure-id'));
+      item.querySelector('.measure-select')?.addEventListener('click', () => {
+        state.selectedMeasurementId = id;
+        redrawAll();
+      });
+      item.querySelector('[data-action="delete"]')?.addEventListener('click', () => {
+        state.measurements = state.measurements.filter((m) => m.id !== id);
+        if (state.selectedMeasurementId === id) {
+          state.selectedMeasurementId = state.measurements[0]?.id ?? null;
+        }
+        redrawAll();
+      });
+    });
+  };
 
   let resizeObserver = null;
   if (typeof ResizeObserver !== 'undefined') {
@@ -124,6 +299,7 @@ export function mountCrossSectionInteractivePlot(container, section) {
       resizePlot(heatPlot);
       resizePlot(rowPlot);
       resizePlot(streamPlot);
+      resizePlot(measurePlot);
       redrawAll();
     });
     resizeObserver.observe(container);
@@ -136,6 +312,7 @@ export function mountCrossSectionInteractivePlot(container, section) {
       heat: heatPlot,
       row: rowPlot,
       stream: streamPlot,
+      measure: measurePlot,
     },
     resizeObserver,
     updateReadouts,
@@ -143,6 +320,9 @@ export function mountCrossSectionInteractivePlot(container, section) {
   };
 
   updateReadouts();
+  updateMeasurementsUi();
+  if (refs.fieldSelect) refs.fieldSelect.value = state.activeFieldKey;
+  if (refs.arrowToggle) refs.arrowToggle.checked = state.showCrosswiseArrows;
   redrawAll();
   return true;
 }
@@ -153,6 +333,7 @@ export function refreshCrossSectionInteractivePlot() {
   resizePlot(activePanel.instances.heat);
   resizePlot(activePanel.instances.row);
   resizePlot(activePanel.instances.stream);
+  resizePlot(activePanel.instances.measure);
   activePanel.redrawAll();
 }
 
@@ -163,10 +344,11 @@ export function destroyCrossSectionInteractivePlot() {
   activePanel.instances.heat?.remove();
   activePanel.instances.row?.remove();
   activePanel.instances.stream?.remove();
+  activePanel.instances.measure?.remove();
   activePanel = null;
 }
 
-function createHeatmapPlot(host, state, setSelection) {
+function createHeatmapPlot(host, state, setSelection, addMeasurement, setMeasurementDraft) {
   const metrics = {
     x: 44,
     y: 22,
@@ -177,6 +359,8 @@ function createHeatmapPlot(host, state, setSelection) {
   };
 
   const sketch = (p) => {
+    let dragStart = null;
+
     p.setup = () => {
       const width = Math.max(MIN_CANVAS_WIDTH, Math.floor(host.clientWidth || 640));
       const height = Math.max(320, Math.round(width * 0.58));
@@ -210,8 +394,7 @@ function createHeatmapPlot(host, state, setSelection) {
           if (!isWater(state.maskGrid, state.velocityGrid, r, c) || !Number.isFinite(v)) {
             p.fill(11, 34, 56);
           } else {
-            const t = clamp((v - state.vMin) / (state.vMax - state.vMin || 1), 0, 1);
-            const [rr, gg, bb] = jetRgb(t);
+            const [rr, gg, bb] = colorForActiveField(state, v);
             p.fill(rr, gg, bb);
           }
 
@@ -219,23 +402,25 @@ function createHeatmapPlot(host, state, setSelection) {
         }
       }
 
-      p.stroke(82, 159, 218, 135);
-      p.strokeWeight(1);
-      const stride = cols >= 20 ? 2 : 1;
-      for (let r = 0; r < rows; r += stride) {
-        for (let c = 0; c < cols; c += stride) {
-          const v = Number(state.velocityGrid[r][c]);
-          if (!isWater(state.maskGrid, state.velocityGrid, r, c) || !Number.isFinite(v)) continue;
-          const field = slopeFieldAt(state.velocityGrid, state.maskGrid, r, c);
-          if (!field) continue;
+      if (state.showCrosswiseArrows) {
+        p.stroke(12, 12, 12, 165);
+        p.strokeWeight(1);
+        const stride = cols >= 20 ? 2 : 1;
+        for (let r = 0; r < rows; r += stride) {
+          for (let c = 0; c < cols; c += stride) {
+            const v = Number(state.baseVelocityGrid[r][c]);
+            if (!isWater(state.maskGrid, state.baseVelocityGrid, r, c) || !Number.isFinite(v)) continue;
+            const field = slopeFieldAt(state.baseVelocityGrid, state.maskGrid, r, c);
+            if (!field) continue;
 
-          const t = clamp((v - state.vMin) / (state.vMax - state.vMin || 1), 0, 1);
-          const len = 3.8 + t * 4.8;
-          const cx = metrics.x + (c + 0.5) * metrics.cellW;
-          const cy = metrics.y + (r + 0.5) * metrics.cellH;
-          const dx = field.vx * len;
-          const dy = field.vy * len;
-          drawArrow(p, cx - dx * 0.5, cy - dy * 0.5, dx, dy);
+            const t = clamp((Math.abs(v) - state.vMin) / (Math.abs(state.vMax - state.vMin) || 1), 0, 1);
+            const len = 3.8 + t * 4.8;
+            const cx = metrics.x + (c + 0.5) * metrics.cellW;
+            const cy = metrics.y + (r + 0.5) * metrics.cellH;
+            const dx = field.vx * len;
+            const dy = field.vy * len;
+            drawArrow(p, cx - dx * 0.5, cy - dy * 0.5, dx, dy);
+          }
         }
       }
 
@@ -257,6 +442,13 @@ function createHeatmapPlot(host, state, setSelection) {
       }
       p.endShape();
 
+      state.measurements.forEach((m) => {
+        drawMeasurementLine(p, metrics, m.start, m.end, m.color, m.id === state.selectedMeasurementId ? 2.8 : 1.6);
+      });
+      if (state.measurementDraft?.start && state.measurementDraft?.end) {
+        drawMeasurementLine(p, metrics, state.measurementDraft.start, state.measurementDraft.end, '#ffffff', 1.2);
+      }
+
       const crossX = metrics.x + (state.selectedCol + 0.5) * metrics.cellW;
       const crossY = metrics.y + (state.selectedRow + 0.5) * metrics.cellH;
       p.stroke(111, 220, 255, 215);
@@ -273,8 +465,8 @@ function createHeatmapPlot(host, state, setSelection) {
       const cbW = 10;
       const cbX = metrics.x + metrics.w + 12;
       for (let i = 0; i < metrics.h; i++) {
-        const t = 1 - i / metrics.h;
-        const [rr, gg, bb] = jetRgb(t);
+        const value = lerp(state.vMax, state.vMin, i / Math.max(1, metrics.h));
+        const [rr, gg, bb] = colorForActiveField(state, value);
         p.stroke(rr, gg, bb);
         p.line(cbX, metrics.y + i, cbX + cbW, metrics.y + i);
       }
@@ -285,6 +477,13 @@ function createHeatmapPlot(host, state, setSelection) {
       p.text(`${formatNumber(state.vMax)} m/s`, cbX + cbW + 5, metrics.y + 2);
       p.textAlign(p.LEFT, p.BOTTOM);
       p.text(`${formatNumber(state.vMin)} m/s`, cbX + cbW + 5, metrics.y + metrics.h - 2);
+      if (state.activeFieldKey === 'crosswise') {
+        p.textAlign(p.LEFT, p.CENTER);
+        p.text('0.000', cbX + cbW + 5, metrics.y + metrics.h * 0.5);
+        p.textAlign(p.LEFT, p.TOP);
+        p.text('(-) left bank', cbX - 3, metrics.y + metrics.h + 8);
+        p.text('(+) right bank', cbX - 3, metrics.y + metrics.h + 20);
+      }
 
       const selectedV = Number(state.velocityGrid[state.selectedRow][state.selectedCol]);
       const selectedWet = isWater(state.maskGrid, state.velocityGrid, state.selectedRow, state.selectedCol);
@@ -295,10 +494,13 @@ function createHeatmapPlot(host, state, setSelection) {
         ? `v=${formatNumber(selectedV)} m/s`
         : 'dry/no-data';
       p.text(sampleLabel, metrics.x + 4, 3);
-      p.text('arrows = streamline-velocity slope field', metrics.x + 128, 3);
+      if (state.showCrosswiseArrows) {
+        p.text('black arrows = cross-wise direction proxy', metrics.x + 128, 3);
+      }
     };
 
     p.mouseMoved = () => {
+      if (state.measurementMode) return;
       const hit = projectCellFromMouse(p, metrics, state.rows, state.cols);
       if (!hit) return;
       setSelection(hit.row, hit.col);
@@ -307,7 +509,31 @@ function createHeatmapPlot(host, state, setSelection) {
     p.mousePressed = () => {
       const hit = projectCellFromMouse(p, metrics, state.rows, state.cols);
       if (!hit) return;
+      if (state.measurementMode) {
+        dragStart = { row: hit.row, col: hit.col };
+        setMeasurementDraft(dragStart, dragStart);
+        return;
+      }
       setSelection(hit.row, hit.col);
+    };
+
+    p.mouseDragged = () => {
+      if (!state.measurementMode || !dragStart) return;
+      const hit = projectCellFromMouse(p, metrics, state.rows, state.cols);
+      if (!hit) return;
+      setMeasurementDraft(dragStart, { row: hit.row, col: hit.col });
+      p.redraw();
+    };
+
+    p.mouseReleased = () => {
+      if (!state.measurementMode || !dragStart) return;
+      const hit = projectCellFromMouse(p, metrics, state.rows, state.cols);
+      if (hit) {
+        addMeasurement(dragStart, { row: hit.row, col: hit.col });
+      }
+      dragStart = null;
+      setMeasurementDraft(null, null);
+      p.redraw();
     };
   };
 
@@ -319,6 +545,71 @@ function createHeatmapPlot(host, state, setSelection) {
       const width = Math.max(MIN_CANVAS_WIDTH, Math.floor(host.clientWidth || 640));
       const height = Math.max(320, Math.round(width * 0.58));
       p5Instance.resizeCanvas(width, height, false);
+    },
+    remove: () => p5Instance.remove(),
+  };
+}
+
+function createMeasurementProfilePlot(host, state) {
+  const metrics = { x: 62, y: 20, w: 0, h: 0 };
+  const sketch = (p) => {
+    p.setup = () => {
+      const width = Math.max(MIN_CANVAS_WIDTH, Math.floor(host.clientWidth || 640));
+      const canvas = p.createCanvas(width, 300);
+      canvas.parent(host);
+      p.noLoop();
+      p.textFont('IBM Plex Sans, sans-serif');
+    };
+
+    p.draw = () => {
+      metrics.w = p.width - metrics.x - 20;
+      metrics.h = p.height - metrics.y - 32;
+      p.background(7, 10, 14);
+      drawGrid(p, metrics, 6, 5);
+
+      const selected = state.measurements.find((m) => m.id === state.selectedMeasurementId) || state.measurements[0];
+      if (!selected) {
+        p.noStroke();
+        p.fill(185);
+        p.textSize(12);
+        p.textAlign(p.CENTER, p.CENTER);
+        p.text('No measurement selected', p.width / 2, p.height / 2);
+        return;
+      }
+
+      const xRange = findFiniteRange(selected.samples.map((s) => s.value), state.vMin, state.vMax);
+      const yRange = findFiniteRange(selected.samples.map((s) => s.distanceFromBed), 0, state.rows * state.depthStepM);
+
+      p.noFill();
+      p.strokeWeight(2.2);
+      p.stroke(...hexToRgb(selected.color));
+      p.beginShape();
+      selected.samples.forEach((s) => {
+        if (!Number.isFinite(s.value) || !Number.isFinite(s.distanceFromBed)) return;
+        const px = metrics.x + ((s.value - xRange.min) / (xRange.max - xRange.min || 1)) * metrics.w;
+        const py = metrics.y + metrics.h - ((s.distanceFromBed - yRange.min) / (yRange.max - yRange.min || 1)) * metrics.h;
+        p.vertex(px, py);
+      });
+      p.endShape();
+
+      p.noStroke();
+      p.fill(205);
+      p.textSize(11);
+      p.textAlign(p.LEFT, p.TOP);
+      p.text(selected.fieldLabel || 'Velocity (m/s)', metrics.x + 6, 3);
+      p.textAlign(p.LEFT, p.BOTTOM);
+      p.text('Distance from bed (m)', 8, metrics.y + metrics.h);
+      p.textAlign(p.CENTER, p.BOTTOM);
+      p.text('Value (m/s)', metrics.x + metrics.w * 0.5, p.height - 6);
+    };
+  };
+
+  const p5Instance = new p5(sketch, host);
+  return {
+    redraw: () => p5Instance.redraw(),
+    resize: () => {
+      const width = Math.max(MIN_CANVAS_WIDTH, Math.floor(host.clientWidth || 640));
+      p5Instance.resizeCanvas(width, 300, false);
     },
     remove: () => p5Instance.remove(),
   };
@@ -403,7 +694,7 @@ function createRowProfilePlot(host, state, setSelection) {
       p.textAlign(p.LEFT, p.BOTTOM);
       p.text(`${formatNumber(state.vMin)} m/s`, metrics.x + 3, metrics.y + metrics.h - 2);
       p.textAlign(p.LEFT, p.TOP);
-      p.text('Selected row velocity vs cross-stream index', metrics.x + 3, 3);
+      p.text(`Selected row: ${state.fieldMeta[state.activeFieldKey]?.label || 'Velocity'}`, metrics.x + 3, 3);
     };
 
     p.mouseMoved = () => {
@@ -439,7 +730,6 @@ function createDepthAveragedPlot(host, state, setSelection) {
     h: 0,
   };
 
-  const yRange = findFiniteRange(state.depthAveraged, state.vMin, state.vMax);
   let dragging = false;
 
   const sketch = (p) => {
@@ -453,6 +743,7 @@ function createDepthAveragedPlot(host, state, setSelection) {
     };
 
     p.draw = () => {
+      const yRange = findFiniteRange(state.depthAveraged, state.vMin, state.vMax);
       metrics.w = p.width - metrics.x - 22;
       metrics.h = p.height - metrics.y - 38;
 
@@ -500,7 +791,7 @@ function createDepthAveragedPlot(host, state, setSelection) {
       p.fill(205);
       p.textAlign(p.LEFT, p.TOP);
       p.textSize(11);
-      p.text('Depth-averaged streamwise velocity', metrics.x + 4, 3);
+      p.text(`Depth-averaged: ${state.fieldMeta[state.activeFieldKey]?.label || 'Velocity'}`, metrics.x + 4, 3);
       p.text(`${formatNumber(yRange.max)} m/s`, 8, metrics.y + 2);
       p.text(`${formatNumber(yRange.min)} m/s`, 8, metrics.y + metrics.h - 12);
       p.textAlign(p.CENTER, p.BOTTOM);
@@ -646,6 +937,199 @@ function mapVelocityToY(v, vMin, vMax, y, h) {
   return y + h - ((v - vMin) / (vMax - vMin || 1)) * h;
 }
 
+function sampleMeasurementLine(state, start, end) {
+  const span = Math.hypot(end.col - start.col, end.row - start.row);
+  const steps = Math.max(12, Math.ceil(span * 4));
+  const out = [];
+  const xCoords = sectionXCoords(state.section, state.cols);
+  let cumulative = 0;
+  let prevXPos = null;
+  let prevYPos = null;
+
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    const row = lerp(start.row, end.row, t);
+    const col = lerp(start.col, end.col, t);
+    const value = sampleVelocityBilinear(state.velocityGrid, state.maskGrid, row, col);
+    const colInt = clamp(Math.round(col), 0, state.cols - 1);
+    const bedRow = estimateBedRowAtCol(state.velocityGrid, state.maskGrid, colInt);
+    const xPosition = sampleCrossSectionX(xCoords, col);
+    const yPosition = row * state.depthStepM;
+    if (prevXPos !== null && prevYPos !== null) {
+      cumulative += Math.hypot(xPosition - prevXPos, yPosition - prevYPos);
+    }
+    prevXPos = xPosition;
+    prevYPos = yPosition;
+
+    out.push({
+      sampleIndex: i + 1,
+      t,
+      distanceAlongLine: cumulative,
+      xPosition,
+      yPosition,
+      row,
+      col,
+      distanceFromBed: Number.isFinite(bedRow) ? (bedRow - row) * state.depthStepM : NaN,
+      value,
+    });
+  }
+  return out;
+}
+
+function sampleVelocityBilinear(velocityGrid, maskGrid, row, col) {
+  const r0 = clamp(Math.floor(row), 0, velocityGrid.length - 1);
+  const c0 = clamp(Math.floor(col), 0, velocityGrid[0].length - 1);
+  const r1 = clamp(r0 + 1, 0, velocityGrid.length - 1);
+  const c1 = clamp(c0 + 1, 0, velocityGrid[0].length - 1);
+  const tr = row - r0;
+  const tc = col - c0;
+  const candidates = [
+    { r: r0, c: c0, w: (1 - tr) * (1 - tc) },
+    { r: r0, c: c1, w: (1 - tr) * tc },
+    { r: r1, c: c0, w: tr * (1 - tc) },
+    { r: r1, c: c1, w: tr * tc },
+  ];
+  let weighted = 0;
+  let weightSum = 0;
+  candidates.forEach(({ r, c, w }) => {
+    const v = Number(velocityGrid[r][c]);
+    if (!isWater(maskGrid, velocityGrid, r, c) || !Number.isFinite(v)) return;
+    weighted += v * w;
+    weightSum += w;
+  });
+  return weightSum > 0 ? weighted / weightSum : NaN;
+}
+
+function estimateBedRowAtCol(velocityGrid, maskGrid, col) {
+  for (let r = velocityGrid.length - 1; r >= 0; r--) {
+    if (isWater(maskGrid, velocityGrid, r, col)) return r + 1;
+  }
+  return NaN;
+}
+
+function sectionXCoords(section, cols) {
+  const xinterp = Array.isArray(section?.mat_summary?.xinterp) ? section.mat_summary.xinterp : null;
+  if (xinterp && xinterp.length > 1) return xinterp.map((v) => Number(v));
+  return Array.from({ length: cols }, (_, i) => i);
+}
+
+function estimateDepthStepMeters(section, rows) {
+  const zStats = section?.mat_summary?.z_stats || {};
+  const zMin = Number(zStats.min);
+  const zMax = Number(zStats.max);
+  if (Number.isFinite(zMin) && Number.isFinite(zMax) && rows > 1) {
+    const span = Math.abs(zMax - zMin);
+    if (span > 0.001) return span / rows;
+  }
+  return 1;
+}
+
+function sampleCrossSectionX(xs, colFloat) {
+  const c = clamp(colFloat, 0, xs.length - 1);
+  const lo = Math.floor(c);
+  const hi = Math.min(xs.length - 1, lo + 1);
+  const t = c - lo;
+  const a = Number(xs[lo]);
+  const b = Number(xs[hi]);
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return c;
+  return lerp(a, b, t);
+}
+
+function drawMeasurementLine(p, metrics, start, end, colorHex, strokeW) {
+  const x1 = metrics.x + (start.col + 0.5) * metrics.cellW;
+  const y1 = metrics.y + (start.row + 0.5) * metrics.cellH;
+  const x2 = metrics.x + (end.col + 0.5) * metrics.cellW;
+  const y2 = metrics.y + (end.row + 0.5) * metrics.cellH;
+  const [r, g, b] = hexToRgb(colorHex);
+  p.stroke(r, g, b, 240);
+  p.strokeWeight(strokeW);
+  p.line(x1, y1, x2, y2);
+  p.noStroke();
+  p.fill(r, g, b, 240);
+  p.circle(x1, y1, 6);
+  p.circle(x2, y2, 6);
+}
+
+function measurementLength(m) {
+  const lastSample = Array.isArray(m?.samples) ? m.samples[m.samples.length - 1] : null;
+  return Number.isFinite(Number(lastSample?.distanceAlongLine))
+    ? Number(lastSample.distanceAlongLine)
+    : Math.hypot(m.end.col - m.start.col, m.end.row - m.start.row);
+}
+
+function hexToRgb(hex) {
+  const raw = String(hex || '#66ccff').replace('#', '');
+  const full = raw.length === 3 ? raw.split('').map((c) => c + c).join('') : raw.padEnd(6, '0').slice(0, 6);
+  const intVal = Number.parseInt(full, 16);
+  return [(intVal >> 16) & 255, (intVal >> 8) & 255, intVal & 255];
+}
+
+function exportMeasurementsWorkbook(state, sectionName) {
+  const workbook = buildExcelXmlWorkbook(state);
+  const blob = new Blob([workbook], { type: 'application/vnd.ms-excel;charset=utf-8;' });
+  const link = document.createElement('a');
+  const safeName = sanitizeFilename(sectionName || 'cross_section');
+  link.href = URL.createObjectURL(blob);
+  link.download = `${safeName}_measurements.xls`;
+  link.click();
+  URL.revokeObjectURL(link.href);
+}
+
+function buildExcelXmlWorkbook(state) {
+  const sheets = state.measurements.map((m) => {
+    const rows = [
+      ['measurement', m.label, 'field', m.fieldLabel || 'Velocity'],
+      ['sample_index', 'x_position', 'y_position', 'distance_from_bed', 'value', 'distance_along_line', 'row', 'col', 't'],
+      ...m.samples.map((s) => [
+        s.sampleIndex,
+        s.xPosition,
+        s.yPosition,
+        s.distanceFromBed,
+        s.value,
+        s.distanceAlongLine,
+        s.row,
+        s.col,
+        s.t,
+      ]),
+    ];
+    const table = rows.map((cells) => `<Row>${cells.map((cell) => buildExcelCell(cell)).join('')}</Row>`).join('');
+    const sheetName = sanitizeWorksheetName(m.label);
+    return `<Worksheet ss:Name="${escapeXml(sheetName)}"><Table>${table}</Table></Worksheet>`;
+  }).join('');
+
+  return `<?xml version="1.0"?>
+<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
+ xmlns:o="urn:schemas-microsoft-com:office:office"
+ xmlns:x="urn:schemas-microsoft-com:office:excel"
+ xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet"
+ xmlns:html="http://www.w3.org/TR/REC-html40">${sheets}</Workbook>`;
+}
+
+function buildExcelCell(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return `<Cell><Data ss:Type="Number">${value}</Data></Cell>`;
+  }
+  return `<Cell><Data ss:Type="String">${escapeXml(value == null ? '' : String(value))}</Data></Cell>`;
+}
+
+function sanitizeWorksheetName(name) {
+  const cleaned = String(name || 'Sheet').replace(/[\\/:*?[\]]/g, '_').trim();
+  return cleaned.slice(0, 31) || 'Sheet';
+}
+
+function sanitizeFilename(name) {
+  return String(name || 'cross_section').replace(/[^a-z0-9-_]+/gi, '_').replace(/^_+|_+$/g, '') || 'cross_section';
+}
+
+function escapeXml(text) {
+  return String(text)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
 function projectCellFromMouse(p, metrics, rows, cols) {
   if (!inPlotRect(p, metrics)) return null;
 
@@ -741,6 +1225,175 @@ function findFiniteRange(values, fallbackMin, fallbackMax) {
   return { min: min - pad, max: max + pad };
 }
 
+function buildFieldGrids(streamwiseGrid, maskGrid) {
+  const totalGrid = streamwiseGrid.map((row) => row.map((v) => {
+    const numeric = Number(v);
+    return Number.isFinite(numeric) ? Math.abs(numeric) : NaN;
+  }));
+  const shearGrid = buildShearVelocityProxyGrid(streamwiseGrid, maskGrid);
+  const crosswiseGrid = buildCrosswiseVelocityProxyGrid(streamwiseGrid, maskGrid);
+
+  return {
+    streamwise: streamwiseGrid,
+    total: totalGrid,
+    shear: shearGrid,
+    crosswise: crosswiseGrid,
+  };
+}
+
+function buildFieldMeta(fieldGrids, maskGrid) {
+  const out = {};
+  FIELD_OPTIONS.forEach((option) => {
+    const grid = fieldGrids[option.key];
+    if (!Array.isArray(grid) || !Array.isArray(grid[0])) return;
+    const [vMin, vMax] = option.key === 'crosswise'
+      ? findSymmetricVelocityRange(grid, maskGrid)
+      : findVelocityRange(grid, maskGrid);
+    out[option.key] = {
+      key: option.key,
+      label: option.label,
+      grid,
+      vMin,
+      vMax,
+      colorMode: option.key === 'crosswise' ? 'diverging' : 'continuous',
+    };
+  });
+  return out;
+}
+
+function buildShearVelocityProxyGrid(velocityGrid, maskGrid) {
+  const rows = velocityGrid.length;
+  const cols = velocityGrid[0].length;
+  const out = Array.from({ length: rows }, () => new Array(cols).fill(NaN));
+
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      if (!isWater(maskGrid, velocityGrid, r, c)) continue;
+      const center = Number(velocityGrid[r][c]);
+      if (!Number.isFinite(center)) continue;
+
+      const left = sampleWetVelocity(velocityGrid, maskGrid, r, c - 1);
+      const right = sampleWetVelocity(velocityGrid, maskGrid, r, c + 1);
+      const up = sampleWetVelocity(velocityGrid, maskGrid, r - 1, c);
+      const down = sampleWetVelocity(velocityGrid, maskGrid, r + 1, c);
+      const dx = Number.isFinite(left) && Number.isFinite(right)
+        ? (right - left) * 0.5
+        : Number.isFinite(right)
+          ? right - center
+          : Number.isFinite(left)
+            ? center - left
+            : 0;
+      const dy = Number.isFinite(up) && Number.isFinite(down)
+        ? (down - up) * 0.5
+        : Number.isFinite(down)
+          ? down - center
+          : Number.isFinite(up)
+            ? center - up
+            : 0;
+      out[r][c] = Math.hypot(dx, dy);
+    }
+  }
+  return out;
+}
+
+function buildCrosswiseVelocityProxyGrid(velocityGrid, maskGrid) {
+  const rows = velocityGrid.length;
+  const cols = velocityGrid[0].length;
+  const out = Array.from({ length: rows }, () => new Array(cols).fill(NaN));
+
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      if (!isWater(maskGrid, velocityGrid, r, c)) continue;
+      const speed = Number(velocityGrid[r][c]);
+      if (!Number.isFinite(speed)) continue;
+      const field = slopeFieldAt(velocityGrid, maskGrid, r, c);
+      if (!field) continue;
+      out[r][c] = speed * field.vx;
+    }
+  }
+  return out;
+}
+
+function findSymmetricVelocityRange(velocityGrid, maskGrid) {
+  let maxAbs = 0;
+  for (let r = 0; r < velocityGrid.length; r++) {
+    for (let c = 0; c < velocityGrid[0].length; c++) {
+      const v = Number(velocityGrid[r][c]);
+      if (!isWater(maskGrid, velocityGrid, r, c) || !Number.isFinite(v)) continue;
+      const absV = Math.abs(v);
+      if (absV > maxAbs) maxAbs = absV;
+    }
+  }
+  if (!(maxAbs > 0)) return [-1, 1];
+  return [-maxAbs, maxAbs];
+}
+
+function colorForActiveField(state, value) {
+  if (!Number.isFinite(value)) return [11, 34, 56];
+  const meta = state.fieldMeta[state.activeFieldKey];
+  if (meta?.colorMode === 'diverging') {
+    const maxAbs = Math.max(Math.abs(state.vMin), Math.abs(state.vMax), 1e-6);
+    const t = clamp(value / maxAbs, -1, 1);
+    return divergingRgb(t);
+  }
+  const t = clamp((value - state.vMin) / (state.vMax - state.vMin || 1), 0, 1);
+  return continuousRgb(t);
+}
+
+function continuousRgb(t) {
+  const stops = [
+    { t: 0.0, hex: 0x12395f },
+    { t: 0.35, hex: 0x2f86c9 },
+    { t: 0.65, hex: 0x45b58f },
+    { t: 0.85, hex: 0xcfd46e },
+    { t: 1.0, hex: 0xffefb2 },
+  ];
+  return sampleRampRgb(stops, t);
+}
+
+function divergingRgb(tSigned) {
+  // negative (left-bank) = blue, near-zero = white, positive (right-bank) = red
+  const t = clamp((tSigned + 1) * 0.5, 0, 1);
+  const stops = [
+    { t: 0.0, hex: 0x2b6cb0 },
+    { t: 0.5, hex: 0xf5f7fb },
+    { t: 1.0, hex: 0xc9303e },
+  ];
+  return sampleRampRgb(stops, t);
+}
+
+function sampleRampRgb(stops, t) {
+  const u = clamp(t, 0, 1);
+  for (let i = 1; i < stops.length; i++) {
+    const a = stops[i - 1];
+    const b = stops[i];
+    if (u > b.t) continue;
+    const localT = (u - a.t) / Math.max(1e-6, b.t - a.t);
+    const c = colorLerpHex(a.hex, b.hex, localT);
+    return [c.r, c.g, c.b];
+  }
+  const last = hexToRgb(`#${stops[stops.length - 1].hex.toString(16).padStart(6, '0')}`);
+  return last;
+}
+
+function colorLerpHex(aHex, bHex, t) {
+  const a = {
+    r: (aHex >> 16) & 255,
+    g: (aHex >> 8) & 255,
+    b: aHex & 255,
+  };
+  const b = {
+    r: (bHex >> 16) & 255,
+    g: (bHex >> 8) & 255,
+    b: bHex & 255,
+  };
+  return {
+    r: Math.round(lerp(a.r, b.r, t)),
+    g: Math.round(lerp(a.g, b.g, t)),
+    b: Math.round(lerp(a.b, b.b, t)),
+  };
+}
+
 function isWater(maskGrid, velocityGrid, r, c) {
   const m = Number(maskGrid?.[r]?.[c]);
   if (Number.isFinite(m)) return m > 0.5;
@@ -749,20 +1402,24 @@ function isWater(maskGrid, velocityGrid, r, c) {
   return Number.isFinite(v) && v !== 0;
 }
 
-function jetRgb(t) {
-  const tc = clamp(t, 0, 1);
-  const r = clamp(1.5 - Math.abs(4 * tc - 3), 0, 1);
-  const g = clamp(1.5 - Math.abs(4 * tc - 2), 0, 1);
-  const b = clamp(1.5 - Math.abs(4 * tc - 1), 0, 1);
-
-  return [Math.round(r * 255), Math.round(g * 255), Math.round(b * 255)];
-}
-
 function clamp(v, min, max) {
   return Math.max(min, Math.min(max, v));
+}
+
+function lerp(a, b, t) {
+  return a + (b - a) * t;
 }
 
 function formatNumber(v) {
   if (!Number.isFinite(v)) return 'NA';
   return Number(v).toFixed(3);
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }

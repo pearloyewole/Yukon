@@ -10,3 +10,8 @@ Huslia_sonar.zip
 __MACOSX/
 *.tif
 *.tiff
+data/rivers/
+*.mat
+*.zip
+*.tif
+*.tiff

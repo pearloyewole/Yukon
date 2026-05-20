@@ -122,9 +122,22 @@
           <button id="resetView" type="button">Reset camera</button>
           <button id="viewerHomeBtn" type="button">Home</button>
         </div>
+       
         <label class="hud-toggle">
           <input id="toggleCrossSections" type="checkbox" checked />
           Show colored cross-sections
+        </label>
+        <label class="hud-toggle">
+          <input id="toggleVegetationTerrain" type="checkbox" />
+          Vegetation terrain (GEF)
+        </label>
+        <label class="hud-toggle">
+          <input id="toggleEarthTerrainColors" type="checkbox" />
+          Earth terrain colors
+        </label>
+        <label class="hud-toggle">
+          <input id="toggleSedimentSamples" type="checkbox" />
+          Show sediment samples
         </label>
       </section>
 
@@ -151,6 +164,7 @@
         <div class="sheet-panel-head">
           <h3>Analysis Sheet</h3>
           <div class="sheet-panel-actions">
+            <button id="exportSheetBtn" class="inline-btn" type="button">Export</button>
             <button id="clearSheetBtn" class="inline-btn" type="button">Clear</button>
             <button id="closeSheetPanelBtn" class="inline-btn" type="button">Close</button>
           </div>

@@ -39,6 +39,9 @@ except ImportError:
     tifffile = None
 
 
+UTC_TZ = getattr(dt, "UTC", dt.timezone.utc)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -1282,7 +1285,7 @@ def main() -> None:
 
     package = {
         "river_id": args.river_id,
-        "generated_at_utc": dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat(),
+        "generated_at_utc": dt.datetime.now(UTC_TZ).replace(microsecond=0).isoformat(),
         "source": source,
         "overview": {
             "path": str(overview),

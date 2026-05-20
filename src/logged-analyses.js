@@ -3,6 +3,30 @@ import {
   getLoggedAnalyses,
 } from './analysisStore.js';
 
+const PRELOADED_RIVERS = [
+  {
+    id: 'huslia',
+    name: 'Huslia',
+    subtitle: 'Default demo',
+    investigator: 'Ready to explore',
+    description: 'Preloaded Huslia package with cross-sections, sonar points, and GEG terrain.',
+  },
+  {
+    id: 'alakanuk',
+    name: 'Alakanuk',
+    subtitle: 'Preloaded package',
+    investigator: 'Ready to explore',
+    description: 'Preloaded Alakanuk package with cross-sections, sonar points, plus GEG/GEF terrain variants.',
+  },
+  {
+    id: 'beaver',
+    name: 'Beaver',
+    subtitle: 'Preloaded package',
+    investigator: 'Ready to explore',
+    description: 'Preloaded Beaver package with cross-sections, sonar points, plus GEG/GEF terrain variants.',
+  },
+];
+
 const els = {
   grid: document.getElementById('loggedAnalysesGrid'),
   backHome: document.getElementById('loggedBackHome'),
@@ -29,20 +53,22 @@ function renderLoggedAnalyses() {
   const analyses = getLoggedAnalyses();
   const cards = [];
 
-  cards.push(`
-    <article class="logged-card logged-card-demo">
-      <div class="logged-card-top">
-        <div class="logged-hero"></div>
-      </div>
-      <h2>Huslia Demo River</h2>
-      <p class="logged-date">Default demo</p>
-      <p class="logged-investigator">Ready to explore</p>
-      <p class="logged-description">Open the preloaded Huslia package to preview the 3D scene and bottom sonar mesh.</p>
-      <div class="logged-actions">
-        <button type="button" class="logged-open-btn" data-action="open-demo">Open</button>
-      </div>
-    </article>
-  `);
+  for (const river of PRELOADED_RIVERS) {
+    cards.push(`
+      <article class="logged-card logged-card-demo">
+        <div class="logged-card-top">
+          <div class="logged-hero"></div>
+        </div>
+        <h2>${sanitize(river.name)}</h2>
+        <p class="logged-date">${sanitize(river.subtitle)}</p>
+        <p class="logged-investigator">${sanitize(river.investigator)}</p>
+        <p class="logged-description">${sanitize(river.description)}</p>
+        <div class="logged-actions">
+          <button type="button" class="logged-open-btn" data-action="open-demo" data-river-id="${sanitize(river.id)}">Open</button>
+        </div>
+      </article>
+    `);
+  }
 
   if (analyses.length === 0) {
     cards.push(`
@@ -91,9 +117,13 @@ function renderLoggedAnalyses() {
     button.addEventListener('click', async () => {
       const action = button.getAttribute('data-action');
       const analysisId = button.getAttribute('data-analysis-id');
+      const riverId = button.getAttribute('data-river-id') || 'huslia';
 
       if (action === 'open-demo') {
-        window.location.href = '/log-analysis.html?mode=demo';
+        const nextUrl = new URL('/log-analysis.html', window.location.origin);
+        nextUrl.searchParams.set('mode', 'demo');
+        nextUrl.searchParams.set('river', riverId);
+        window.location.href = nextUrl.toString();
         return;
       }
 
