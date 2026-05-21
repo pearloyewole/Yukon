@@ -4454,7 +4454,11 @@ function renderCrossSectionDetails(section) {
   if (hasPlotData) {
     const interactiveMount = document.getElementById('crossSectionInteractiveMount');
     if (interactiveMount) {
-      mountCrossSectionInteractivePlot(interactiveMount, section);
+      mountCrossSectionInteractivePlot(interactiveMount, section, {
+        onLayoutExpandChange: (nextExpanded) => {
+          setMeasurementLayoutExpanded(nextExpanded);
+        },
+      });
     }
   }
 
@@ -4939,9 +4943,30 @@ function openDetailsPanel() {
   requestPlotRedraw();
 }
 
+function setMeasurementLayoutExpanded(nextExpanded) {
+  const expanded = Boolean(nextExpanded);
+  els.detailsPanel.classList.toggle('sidebar-measurements-expanded', expanded);
+
+  if (!expanded) {
+    els.detailsPanel.style.removeProperty('width');
+  }
+
+  if (window.matchMedia('(max-width: 980px)').matches) {
+    return;
+  }
+
+  if (expanded) {
+    const minWidth = 760;
+    const maxWidth = Math.max(minWidth, Math.floor(window.innerWidth * 0.88));
+    const targetWidth = clamp(Math.floor(window.innerWidth * 0.78), minWidth, maxWidth);
+    els.detailsPanel.style.width = `${targetWidth}px`;
+  }
+}
+
 function closeDetailsPanel() {
   els.detailsPanel.classList.add('is-hidden');
   els.detailsPanel.setAttribute('aria-hidden', 'true');
+  setMeasurementLayoutExpanded(false);
   selectedSection = null;
   destroyCrossSectionInteractivePlot();
   highlightMarker(null);

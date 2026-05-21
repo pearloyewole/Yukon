@@ -1116,6 +1116,10 @@ button:hover {
   transition: transform 180ms ease;
 }
 
+.sidebar.sidebar-measurements-expanded {
+  width: min(1120px, 84vw);
+}
+
 .sidebar.is-hidden {
   transform: translateX(calc(100% + 16px));
   pointer-events: none;
@@ -1325,6 +1329,17 @@ button:hover {
   padding: 8px;
 }
 
+.cross-section-interactive-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 1fr;
+}
+
+.plot-panel-measurements {
+  display: grid;
+  align-content: start;
+}
+
 .plot-panel {
   border: 1px solid rgba(95, 183, 255, 0.2);
   border-radius: 8px;
@@ -1338,6 +1353,12 @@ button:hover {
   justify-content: space-between;
   gap: 8px;
   margin-bottom: 6px;
+}
+
+.plot-head-actions {
+  display: grid;
+  justify-items: end;
+  gap: 5px;
 }
 
 .plot-controls {
@@ -1431,9 +1452,39 @@ button:hover {
   margin-top: 0;
 }
 
+.measure-toolbar-primary button {
+  padding: 5px 8px;
+  font-size: 0.72rem;
+  border-radius: 6px;
+}
+
+.measure-toolbar-secondary button {
+  padding: 4px 8px;
+  font-size: 0.7rem;
+  border-radius: 6px;
+}
+
+.measure-layout-toggle {
+  width: auto;
+  margin-top: 0;
+  padding: 4px 8px;
+  font-size: 0.7rem;
+  border-radius: 6px;
+  white-space: nowrap;
+}
+
+.measure-layout-toggle.is-active {
+  border-color: rgba(123, 236, 255, 0.88);
+  background: rgba(10, 95, 136, 0.86);
+}
+
 .measure-toolbar button.is-active {
   border-color: rgba(123, 236, 255, 0.88);
   background: rgba(10, 95, 136, 0.86);
+}
+
+.measure-toolbar-secondary {
+  margin-top: -2px;
 }
 
 .measure-list {
@@ -1552,6 +1603,13 @@ button:hover {
 
 .cross-section-actions button:hover {
   background: rgba(3, 98, 145, 0.82);
+}
+
+@media (min-width: 980px) {
+  .cross-section-interactive-grid {
+    grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+    align-items: start;
+  }
 }
 
 /* Unified Blue Theme */

@@ -17,11 +17,14 @@ const FIELD_OPTIONS = [
   { key: 'crosswise', label: 'Cross-wise velocity (m/s)' },
 ];
 
-export function mountCrossSectionInteractivePlot(container, section) {
+export function mountCrossSectionInteractivePlot(container, section, options = {}) {
   destroyCrossSectionInteractivePlot();
 
   const velocityGrid = section?.mat_summary?.velocity?.sample;
   const maskGrid = section?.mat_summary?.mask?.sample;
+  const onLayoutExpandChange = typeof options?.onLayoutExpandChange === 'function'
+    ? options.onLayoutExpandChange
+    : null;
 
   if (
     !Array.isArray(velocityGrid) ||
@@ -61,86 +64,105 @@ export function mountCrossSectionInteractivePlot(container, section) {
     measurements: [],
     measurementSeq: 0,
     selectedMeasurementId: null,
+    showSelectedOnly: false,
+    layoutExpanded: false,
   };
 
   container.innerHTML = `
     <div class="cross-section-interactive">
-      <section class="plot-panel">
-        <div class="plot-head">
-          <h4 class="plot-title">Velocity Cross-Section (Hover to inspect)</h4>
-          <div class="plot-readout" data-heat-readout></div>
-        </div>
-        <div class="plot-controls">
-          <label class="plot-control">
-            <span>Field</span>
-            <select data-field-select>
-              ${FIELD_OPTIONS.map((item) => `<option value="${item.key}">${escapeHtml(item.label)}</option>`).join('')}
-            </select>
-          </label>
-          <label class="plot-control plot-control-check">
-            <input data-arrow-toggle type="checkbox" checked />
-            Show cross-wise arrows
-          </label>
-        </div>
-        <p class="plot-hint">Cross-wise and shear fields are prototype-derived from the available velocity grid.</p>
-        <div data-heat-host class="cross-p5-host cross-p5-host-heat"></div>
-      </section>
+      <div class="cross-section-interactive-grid">
+        <section class="plot-panel">
+          <div class="plot-head">
+            <h4 class="plot-title">Velocity Cross-Section (Hover to inspect)</h4>
+            <div class="plot-readout" data-heat-readout></div>
+          </div>
+          <div class="plot-controls">
+            <label class="plot-control">
+              <span>Field</span>
+              <select data-field-select>
+                ${FIELD_OPTIONS.map((item) => `<option value="${item.key}">${escapeHtml(item.label)}</option>`).join('')}
+              </select>
+            </label>
+            <label class="plot-control plot-control-check">
+              <input data-arrow-toggle type="checkbox" checked />
+              Show cross-wise arrows
+            </label>
+          </div>
+          <p class="plot-hint">Cross-wise and shear fields are prototype-derived from the available velocity grid.</p>
+          <div data-heat-host class="cross-p5-host cross-p5-host-heat"></div>
+        </section>
 
-      <section class="plot-panel">
-        <div class="plot-head">
-          <h4 class="plot-title">Selected Depth Row Profile (Hover to probe)</h4>
-          <div class="plot-readout" data-row-readout></div>
-        </div>
-        <div data-row-host class="cross-p5-host cross-p5-host-row"></div>
-      </section>
-
-      <section class="plot-panel">
-        <div class="plot-head">
-          <h4 class="plot-title">Depth-Averaged Streamwise Velocity</h4>
-          <div class="plot-readout" data-stream-readout></div>
-        </div>
-        <p class="plot-hint">Drag the vertical cursor left/right to explore values.</p>
-        <div data-stream-host class="cross-p5-host cross-p5-host-stream"></div>
-      </section>
-
-      <section class="plot-panel">
-        <div class="plot-head">
-          <h4 class="plot-title">Cross-Section Measurements</h4>
-          <div class="plot-readout" data-measure-readout>No measurements yet</div>
-        </div>
-        <div class="measure-toolbar">
-          <button type="button" data-measure-toggle>Start measurement mode</button>
-          <button type="button" data-measure-clear>Clear all</button>
-          <button type="button" data-measure-export>Export to Excel</button>
-        </div>
-        <div data-measure-list class="measure-list"></div>
-        <div data-measure-profile-host class="cross-p5-host cross-p5-host-measure"></div>
-      </section>
+        <section class="plot-panel plot-panel-measurements">
+          <div class="plot-head">
+            <h4 class="plot-title">Velocity vs Height Above Bed</h4>
+            <div class="plot-head-actions plot-head-actions-measure">
+              <button type="button" class="measure-layout-toggle" data-layout-toggle>Expand side panel</button>
+              <div class="plot-readout" data-measure-readout>No measurements yet</div>
+            </div>
+          </div>
+          <div class="measure-toolbar measure-toolbar-primary">
+            <button type="button" data-measure-toggle>Start measurement mode</button>
+            <button type="button" data-measure-clear>Clear all</button>
+            <button type="button" data-measure-export>Export to Excel</button>
+          </div>
+          <div class="measure-toolbar measure-toolbar-secondary">
+            <button type="button" data-measure-prev>Prev transect</button>
+            <button type="button" data-measure-next>Next transect</button>
+            <label class="plot-control plot-control-check">
+              <input data-measure-show-selected-only type="checkbox" />
+              Show only selected transect
+            </label>
+          </div>
+          <div data-measure-list class="measure-list"></div>
+          <div data-measure-profile-host class="cross-p5-host cross-p5-host-measure"></div>
+        </section>
+      </div>
     </div>
   `;
 
   const refs = {
     heatReadout: container.querySelector('[data-heat-readout]'),
-    rowReadout: container.querySelector('[data-row-readout]'),
-    streamReadout: container.querySelector('[data-stream-readout]'),
     measureReadout: container.querySelector('[data-measure-readout]'),
     heatHost: container.querySelector('[data-heat-host]'),
-    rowHost: container.querySelector('[data-row-host]'),
-    streamHost: container.querySelector('[data-stream-host]'),
     measureToggleBtn: container.querySelector('[data-measure-toggle]'),
     measureClearBtn: container.querySelector('[data-measure-clear]'),
     measureExportBtn: container.querySelector('[data-measure-export]'),
+    measurePrevBtn: container.querySelector('[data-measure-prev]'),
+    measureNextBtn: container.querySelector('[data-measure-next]'),
+    measureShowSelectedOnly: container.querySelector('[data-measure-show-selected-only]'),
+    layoutToggleBtn: container.querySelector('[data-layout-toggle]'),
     fieldSelect: container.querySelector('[data-field-select]'),
     arrowToggle: container.querySelector('[data-arrow-toggle]'),
     measureList: container.querySelector('[data-measure-list]'),
     measureProfileHost: container.querySelector('[data-measure-profile-host]'),
   };
 
+  const syncSelectedMeasurement = () => {
+    if (state.measurements.length === 0) {
+      state.selectedMeasurementId = null;
+      return null;
+    }
+
+    const selected = state.measurements.find((m) => m.id === state.selectedMeasurementId);
+    if (selected) return selected;
+
+    state.selectedMeasurementId = state.measurements[0].id;
+    return state.measurements[0];
+  };
+
+  const cycleSelectedMeasurement = (direction) => {
+    if (state.measurements.length === 0) return;
+    const currentIndex = state.measurements.findIndex((m) => m.id === state.selectedMeasurementId);
+    const startIndex = currentIndex >= 0 ? currentIndex : 0;
+    const step = direction >= 0 ? 1 : -1;
+    const nextIndex = (startIndex + step + state.measurements.length) % state.measurements.length;
+    state.selectedMeasurementId = state.measurements[nextIndex].id;
+    redrawAll();
+  };
+
   const redrawAll = () => {
     if (!activePanel) return;
     activePanel.instances.heat?.redraw();
-    activePanel.instances.row?.redraw();
-    activePanel.instances.stream?.redraw();
     activePanel.instances.measure?.redraw();
     updateReadouts();
     updateMeasurementsUi();
@@ -168,20 +190,17 @@ export function mountCrossSectionInteractivePlot(container, section) {
       ? `${fieldLabel} at row ${row + 1}, col ${col + 1}: ${formatNumber(cellV)} m/s`
       : `${fieldLabel} at row ${row + 1}, col ${col + 1}: dry/no-data`;
 
-    const rowStats = summarizeRow(state.velocityGrid, state.maskGrid, row);
-    refs.rowReadout.textContent = rowStats.count > 0
-      ? `row ${row + 1} mean ${formatNumber(rowStats.mean)} m/s, selected col ${col + 1}`
-      : `row ${row + 1}: no wet cells`;
-
-    const streamVal = state.depthAveraged[col];
-    const depthAvgLabel = state.fieldMeta[state.activeFieldKey]?.label || 'Velocity';
-    refs.streamReadout.textContent = Number.isFinite(streamVal)
-      ? `${depthAvgLabel}, cursor col ${col + 1}: ${formatNumber(streamVal)} m/s`
-      : `${depthAvgLabel}, cursor col ${col + 1}: no-data`;
+    const selected = syncSelectedMeasurement();
+    const visibilityLabel = state.showSelectedOnly && selected
+      ? `showing ${selected.label} only`
+      : 'showing all transects';
 
     refs.measureReadout.textContent = state.measurements.length > 0
-      ? `${state.measurements.length} line(s) collected`
+      ? `${state.measurements.length} line(s) collected • ${visibilityLabel}`
       : 'No measurements yet';
+
+    refs.layoutToggleBtn.textContent = state.layoutExpanded ? 'Collapse side panel' : 'Expand side panel';
+    refs.layoutToggleBtn.classList.toggle('is-active', state.layoutExpanded);
   };
 
   const setActiveField = (fieldKey) => {
@@ -227,8 +246,6 @@ export function mountCrossSectionInteractivePlot(container, section) {
   };
 
   const heatPlot = createHeatmapPlot(refs.heatHost, state, setSelection, addMeasurement, setMeasurementDraft);
-  const rowPlot = createRowProfilePlot(refs.rowHost, state, setSelection);
-  const streamPlot = createDepthAveragedPlot(refs.streamHost, state, setSelection);
   const measurePlot = createMeasurementProfilePlot(refs.measureProfileHost, state);
 
   refs.measureToggleBtn?.addEventListener('click', () => {
@@ -249,6 +266,25 @@ export function mountCrossSectionInteractivePlot(container, section) {
     exportMeasurementsWorkbook(state, section?.transect || section?.mat_file || 'cross_section');
   });
 
+  refs.measurePrevBtn?.addEventListener('click', () => {
+    cycleSelectedMeasurement(-1);
+  });
+
+  refs.measureNextBtn?.addEventListener('click', () => {
+    cycleSelectedMeasurement(1);
+  });
+
+  refs.measureShowSelectedOnly?.addEventListener('change', () => {
+    state.showSelectedOnly = Boolean(refs.measureShowSelectedOnly.checked);
+    redrawAll();
+  });
+
+  refs.layoutToggleBtn?.addEventListener('click', () => {
+    state.layoutExpanded = !state.layoutExpanded;
+    onLayoutExpandChange?.(state.layoutExpanded);
+    updateReadouts();
+  });
+
   refs.fieldSelect?.addEventListener('change', () => {
     setActiveField(refs.fieldSelect.value);
   });
@@ -260,8 +296,15 @@ export function mountCrossSectionInteractivePlot(container, section) {
 
   const updateMeasurementsUi = () => {
     if (!refs.measureList) return;
+    syncSelectedMeasurement();
+
     refs.measureToggleBtn.textContent = state.measurementMode ? 'Stop measurement mode' : 'Start measurement mode';
     refs.measureToggleBtn.classList.toggle('is-active', state.measurementMode);
+    if (refs.measureShowSelectedOnly) refs.measureShowSelectedOnly.checked = state.showSelectedOnly;
+    if (refs.measurePrevBtn) refs.measurePrevBtn.disabled = state.measurements.length < 2;
+    if (refs.measureNextBtn) refs.measureNextBtn.disabled = state.measurements.length < 2;
+    if (refs.measureClearBtn) refs.measureClearBtn.disabled = state.measurements.length === 0;
+    if (refs.measureExportBtn) refs.measureExportBtn.disabled = state.measurements.length === 0;
 
     if (state.measurements.length === 0) {
       refs.measureList.innerHTML = '<p class="plot-hint">Enable measurement mode, then click-drag on the heatmap to capture a line.</p>';
@@ -297,8 +340,6 @@ export function mountCrossSectionInteractivePlot(container, section) {
   if (typeof ResizeObserver !== 'undefined') {
     resizeObserver = new ResizeObserver(() => {
       resizePlot(heatPlot);
-      resizePlot(rowPlot);
-      resizePlot(streamPlot);
       resizePlot(measurePlot);
       redrawAll();
     });
@@ -310,19 +351,20 @@ export function mountCrossSectionInteractivePlot(container, section) {
     refs,
     instances: {
       heat: heatPlot,
-      row: rowPlot,
-      stream: streamPlot,
       measure: measurePlot,
     },
     resizeObserver,
+    onLayoutExpandChange,
     updateReadouts,
     redrawAll,
   };
 
+  onLayoutExpandChange?.(false);
   updateReadouts();
   updateMeasurementsUi();
   if (refs.fieldSelect) refs.fieldSelect.value = state.activeFieldKey;
   if (refs.arrowToggle) refs.arrowToggle.checked = state.showCrosswiseArrows;
+  if (refs.measureShowSelectedOnly) refs.measureShowSelectedOnly.checked = state.showSelectedOnly;
   redrawAll();
   return true;
 }
@@ -331,8 +373,6 @@ export function refreshCrossSectionInteractivePlot() {
   if (!activePanel) return;
 
   resizePlot(activePanel.instances.heat);
-  resizePlot(activePanel.instances.row);
-  resizePlot(activePanel.instances.stream);
   resizePlot(activePanel.instances.measure);
   activePanel.redrawAll();
 }
@@ -340,10 +380,11 @@ export function refreshCrossSectionInteractivePlot() {
 export function destroyCrossSectionInteractivePlot() {
   if (!activePanel) return;
 
+  if (activePanel.state?.layoutExpanded) {
+    activePanel.onLayoutExpandChange?.(false);
+  }
   activePanel.resizeObserver?.disconnect();
   activePanel.instances.heat?.remove();
-  activePanel.instances.row?.remove();
-  activePanel.instances.stream?.remove();
   activePanel.instances.measure?.remove();
   activePanel = null;
 }
@@ -442,7 +483,9 @@ function createHeatmapPlot(host, state, setSelection, addMeasurement, setMeasure
       }
       p.endShape();
 
-      state.measurements.forEach((m) => {
+      const selectedMeasurement = state.measurements.find((m) => m.id === state.selectedMeasurementId) || state.measurements[0] || null;
+      const measurementsToDraw = state.showSelectedOnly && selectedMeasurement ? [selectedMeasurement] : state.measurements;
+      measurementsToDraw.forEach((m) => {
         drawMeasurementLine(p, metrics, m.start, m.end, m.color, m.id === state.selectedMeasurementId ? 2.8 : 1.6);
       });
       if (state.measurementDraft?.start && state.measurementDraft?.end) {
