@@ -57,6 +57,10 @@ const TIMELAPSE_VIDEO_ASSETS = [
   },
 ];
 const DEMO_RIVER_VIDEO_ICON_COUNT = 14;
+const BANK_ARROW_SCALE_MIN = 1;
+const BANK_ARROW_SCALE_MAX = 2.45;
+const BANK_ARROW_REF_MIN_DISTANCE = 420;
+const BANK_ARROW_UPDATE_EPSILON = 0.03;
 
 function getPreloadedRiverById(riverId) {
   const key = String(riverId || '').trim().toLowerCase();
@@ -2358,6 +2362,8 @@ async function loadPackage(data) {
   closeDetailsPanel();
 
   fitCameraToObject(currentRiverGroup);
+  setMigrationArrowZoomReference();
+  updateBankMigrationArrowScale();
 }
 
 function buildBankPointCloud(points) {
@@ -2404,7 +2410,9 @@ function buildBankPointCloud(points) {
     depthWrite: false,
   });
 
-  return new THREE.Points(geometry, material);
+  const cloud = new THREE.Points(geometry, material);
+  cloud.userData.objectType = 'bank-point-cloud';
+  return cloud;
 }
 
 function buildBankMigrationArrows(points) {
@@ -2462,41 +2470,35 @@ function buildBankMigrationArrows(points) {
     const dirX = point.dispX / vectorLength;
     const dirZ = point.dispY / vectorLength;
 
-    const shaftLength = clamp(point.magnitude * scale, 7, maxLength);
-    const headLength = clamp(shaftLength * 0.24, 4.5, 18);
-    const wingSpan = headLength * 0.52;
+    const baseShaftLength = clamp(point.magnitude * scale, 7, maxLength);
+    const baseHeadLength = clamp(baseShaftLength * 0.24, 4.5, 18);
+    const baseWingSpan = baseHeadLength * 0.52;
 
     const startX = point.x - worldCenter.x;
     const startZ = point.y - worldCenter.y;
     const startY = 12;
 
-    const tipX = startX + dirX * shaftLength;
-    const tipZ = startZ + dirZ * shaftLength;
-
-    const backX = tipX - dirX * headLength;
-    const backZ = tipZ - dirZ * headLength;
-    const perpX = -dirZ;
-    const perpZ = dirX;
-    const leftX = backX + perpX * wingSpan;
-    const leftZ = backZ + perpZ * wingSpan;
-    const rightX = backX - perpX * wingSpan;
-    const rightZ = backZ - perpZ * wingSpan;
-
     const t = Number.isFinite(magP97) && magP97 > 0 ? clamp(point.magnitude / magP97, 0, 1) : 0;
     color.setHSL(0.58 - 0.52 * t, 0.84, 0.6 - 0.1 * t);
 
-    positions.push(startX, startY, startZ, tipX, startY, tipZ);
-    positions.push(tipX, startY, tipZ, leftX, startY, leftZ);
-    positions.push(tipX, startY, tipZ, rightX, startY, rightZ);
-
-    arrowData.push({
+    const arrow = {
       rawX: point.x,
       rawY: point.y,
       dispX: point.dispX,
       dispY: point.dispY,
       magnitude: point.magnitude,
-      shaftLength,
-    });
+      shaftLength: baseShaftLength,
+      startX,
+      startY,
+      startZ,
+      dirX,
+      dirZ,
+      baseShaftLength,
+      baseHeadLength,
+      baseWingSpan,
+    };
+    arrowData.push(arrow);
+    appendMigrationArrowVertices(positions, arrow, 1);
 
     for (let j = 0; j < 6; j++) {
       colors.push(color.r, color.g, color.b);
@@ -2506,7 +2508,9 @@ function buildBankMigrationArrows(points) {
   if (positions.length === 0) return null;
 
   const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  const positionAttr = new THREE.Float32BufferAttribute(positions, 3);
+  positionAttr.setUsage(THREE.DynamicDrawUsage);
+  geometry.setAttribute('position', positionAttr);
   geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
 
   const material = new THREE.LineBasicMaterial({
@@ -2520,9 +2524,106 @@ function buildBankMigrationArrows(points) {
   arrows.userData = {
     type: 'bank-migration-arrows',
     arrowData,
+    zoomReferenceDistance: null,
+    zoomScale: 1,
   };
   arrows.renderOrder = 4;
   return arrows;
+}
+
+function appendMigrationArrowVertices(target, arrow, zoomScale) {
+  const baseOffset = target.length;
+  target.length = baseOffset + 18;
+  writeMigrationArrowVertices(target, baseOffset, arrow, zoomScale);
+}
+
+function writeMigrationArrowVertices(target, offset, arrow, zoomScale) {
+  const scale = Number.isFinite(zoomScale) ? zoomScale : 1;
+  const shaftLength = arrow.baseShaftLength * scale;
+  const headLength = arrow.baseHeadLength * scale;
+  const wingSpan = arrow.baseWingSpan * scale;
+
+  const tipX = arrow.startX + arrow.dirX * shaftLength;
+  const tipZ = arrow.startZ + arrow.dirZ * shaftLength;
+  const backX = tipX - arrow.dirX * headLength;
+  const backZ = tipZ - arrow.dirZ * headLength;
+  const perpX = -arrow.dirZ;
+  const perpZ = arrow.dirX;
+  const leftX = backX + perpX * wingSpan;
+  const leftZ = backZ + perpZ * wingSpan;
+  const rightX = backX - perpX * wingSpan;
+  const rightZ = backZ - perpZ * wingSpan;
+
+  target[offset++] = arrow.startX;
+  target[offset++] = arrow.startY;
+  target[offset++] = arrow.startZ;
+  target[offset++] = tipX;
+  target[offset++] = arrow.startY;
+  target[offset++] = tipZ;
+
+  target[offset++] = tipX;
+  target[offset++] = arrow.startY;
+  target[offset++] = tipZ;
+  target[offset++] = leftX;
+  target[offset++] = arrow.startY;
+  target[offset++] = leftZ;
+
+  target[offset++] = tipX;
+  target[offset++] = arrow.startY;
+  target[offset++] = tipZ;
+  target[offset++] = rightX;
+  target[offset++] = arrow.startY;
+  target[offset++] = rightZ;
+
+  return offset;
+}
+
+function setMigrationArrowZoomReference() {
+  if (!bankMigrationArrowLayer || !camera || !controls) return;
+  const distance = camera.position.distanceTo(controls.target);
+  if (!Number.isFinite(distance) || distance <= 0) return;
+
+  bankMigrationArrowLayer.userData.zoomReferenceDistance = Math.max(BANK_ARROW_REF_MIN_DISTANCE, distance);
+  bankMigrationArrowLayer.userData.zoomScale = 1;
+}
+
+function updateBankMigrationArrowScale() {
+  if (!bankMigrationArrowLayer || !camera || !controls) return;
+
+  const arrowData = Array.isArray(bankMigrationArrowLayer.userData?.arrowData)
+    ? bankMigrationArrowLayer.userData.arrowData
+    : null;
+  if (!arrowData || arrowData.length === 0) return;
+
+  const positionAttr = bankMigrationArrowLayer.geometry?.getAttribute?.('position');
+  const positionArray = positionAttr?.array;
+  if (!positionArray) return;
+
+  const cameraDistance = camera.position.distanceTo(controls.target);
+  if (!Number.isFinite(cameraDistance) || cameraDistance <= 0) return;
+
+  const currentRef = Number(bankMigrationArrowLayer.userData.zoomReferenceDistance);
+  const referenceDistance = Number.isFinite(currentRef) && currentRef > 0
+    ? currentRef
+    : Math.max(BANK_ARROW_REF_MIN_DISTANCE, cameraDistance);
+  if (!Number.isFinite(currentRef) || currentRef <= 0) {
+    bankMigrationArrowLayer.userData.zoomReferenceDistance = referenceDistance;
+  }
+
+  const rawScale = Math.pow(cameraDistance / referenceDistance, 0.45);
+  const nextScale = clamp(rawScale, BANK_ARROW_SCALE_MIN, BANK_ARROW_SCALE_MAX);
+  const prevScale = Number(bankMigrationArrowLayer.userData.zoomScale) || 1;
+  if (Math.abs(nextScale - prevScale) < BANK_ARROW_UPDATE_EPSILON) return;
+
+  bankMigrationArrowLayer.userData.zoomScale = nextScale;
+
+  let offset = 0;
+  for (const arrow of arrowData) {
+    offset = writeMigrationArrowVertices(positionArray, offset, arrow, nextScale);
+  }
+
+  positionAttr.needsUpdate = true;
+  bankMigrationArrowLayer.geometry.computeBoundingSphere();
 }
 
 function buildSonarDepthCalibration(sonarBottom, sections) {
@@ -2640,6 +2741,7 @@ function buildSonarBottomPointCloud(sonarBottom, riverEnvelope, depthCalibration
   });
 
   const cloud = new THREE.Points(geometry, material);
+  cloud.userData.objectType = 'sonar-bottom-points';
   cloud.renderOrder = 1;
   return cloud;
 }
@@ -4141,7 +4243,7 @@ function jetColorRgb(t) {
 
 function onPointerDown(event) {
   if (measurementModeEnabled) {
-    const point = projectPointerToMeasurementPlane(event);
+    const point = projectPointerToMeasurementSurface(event);
     if (!point) return;
     beginMeasurementDrag(event, point);
     return;
@@ -4212,12 +4314,12 @@ function onPointerMove(event) {
   if (!measurementDragActive) return;
   if (measurementPointerId !== null && event.pointerId !== measurementPointerId) return;
 
-  const point = projectPointerToMeasurementPlane(event);
+  const point = projectPointerToMeasurementSurface(event);
   if (!point) return;
   measurementEnd = point.clone();
   updateMeasurementLine();
 
-  const distance = measurementStart.distanceTo(measurementEnd);
+  const distance = planarMeasurementDistance(measurementStart, measurementEnd);
   showMeasurementReadout(event.clientX, event.clientY, `${formatNum(distance)} m`);
 }
 
@@ -4238,7 +4340,7 @@ function onPointerUp(event) {
   hideMeasurementReadout();
 
   const finalDistance = measurementStart && measurementEnd
-    ? measurementStart.distanceTo(measurementEnd)
+    ? planarMeasurementDistance(measurementStart, measurementEnd)
     : null;
   if (Number.isFinite(finalDistance) && measurementStart && measurementEnd) {
     if (finalDistance <= 0.01) {
@@ -4254,11 +4356,33 @@ function onPointerUp(event) {
   }
 }
 
-function projectPointerToMeasurementPlane(event) {
+function projectPointerToMeasurementSurface(event) {
   const rect = renderer.domElement.getBoundingClientRect();
   mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
   mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
   raycaster.setFromCamera(mouse, camera);
+
+  if (currentRiverGroup) {
+    const hits = raycaster.intersectObject(currentRiverGroup, true);
+    for (const hit of hits) {
+      const object = hit?.object;
+      if (!object?.visible) continue;
+
+      const objectType = object.userData?.objectType;
+      if (
+        objectType === 'cross-section-marker'
+        || objectType === 'river-video-site'
+        || objectType === 'sediment-sample'
+      ) {
+        continue;
+      }
+
+      // Prefer actual rendered map surfaces/point-clouds over fallback plane projection.
+      if (object.isMesh || object.isPoints) {
+        return hit.point.clone();
+      }
+    }
+  }
 
   const planeY = getGroundReferenceY() + 2;
   const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -planeY);
@@ -4267,6 +4391,11 @@ function projectPointerToMeasurementPlane(event) {
     return null;
   }
   return intersection;
+}
+
+function planarMeasurementDistance(start, end) {
+  if (!start || !end) return NaN;
+  return Math.hypot(end.x - start.x, end.z - start.z);
 }
 
 function beginMeasurementDrag(event, point) {
@@ -4683,12 +4812,15 @@ async function renderCrossSectionDetails(section) {
       </section>
 
       <section class="cs-card cs-plot-card">
-        <div class="cs-card-head">
+        <div class="cs-card-head cs-card-head-plot">
           <div>
             <h4 class="cs-card-title">Lateral Velocity (m/s) vs Position (m)</h4>
             <p class="cs-card-subtitle">${escapeHtml(sectionName)} - Cross-section visualization</p>
           </div>
-          <span class="cs-chip">interactive</span>
+          <div class="cs-plot-head-actions">
+            <span class="cs-chip">interactive</span>
+            ${hasPlotData ? '<div id="crossSectionPlotTitleControls" class="cross-section-title-controls"></div>' : ''}
+          </div>
         </div>
         ${
           hasPlotData
@@ -4715,8 +4847,10 @@ async function renderCrossSectionDetails(section) {
 
   if (hasPlotData) {
     const interactiveMount = document.getElementById('crossSectionInteractiveMount');
+    const titleControlsHost = document.getElementById('crossSectionPlotTitleControls');
     if (interactiveMount) {
       mountCrossSectionInteractivePlot(interactiveMount, section, {
+        controlsHost: titleControlsHost,
         onLayoutExpandChange: (nextExpanded) => {
           setMeasurementLayoutExpanded(nextExpanded);
         },
@@ -5365,6 +5499,8 @@ function disposeGroundBasePlane(plane) {
 function resetCamera() {
   if (!currentRiverGroup) return;
   fitCameraToObject(currentRiverGroup);
+  setMigrationArrowZoomReference();
+  updateBankMigrationArrowScale();
 }
 
 function onResize() {
@@ -5381,6 +5517,7 @@ function animate() {
   const delta = clock.getDelta();
   updateKeyboardNavigation(delta);
   controls.update();
+  updateBankMigrationArrowScale();
   renderer.render(scene, camera);
 }
 
