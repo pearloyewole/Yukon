@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "description": "Curated timelapse image folders shipped with Yukon (small demos only).",
+  "folders": [
+    {
+      "id": "alakanuk_site_a",
+      "images": 7,
+      "notes": "Alakanuk camera A, 14 Jun 2023"
+    },
+    {
+      "id": "alakanuk_site_b",
+      "images": 8,
+      "notes": "Alakanuk camera B, 14 Jun 2023"
+    },
+    {
+      "id": "sequence_60",
+      "images": 60,
+      "notes": "General river sequence (sub_data1)"
+    }
+  ],
+  "excluded_from_repo": [
+    "103D5600 (~483 images)",
+    "aligned (~483 images)",
+    "117D5600 (~16 images)"
+  ]
+}

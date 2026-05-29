@@ -5,6 +5,7 @@ const HOME_WELCOME_IMAGE_URL = new URL('../assets/home screen image.jpg', import
 const els = {
   openSetupPage: document.getElementById('openSetupPage'),
   openLoggedAnalyses: document.getElementById('openLoggedAnalyses'),
+  openRiverAligner: document.getElementById('openRiverAligner'),
   loggedAnalysesMeta: document.getElementById('loggedAnalysesMeta'),
   homeWelcomeImage: document.getElementById('homeWelcomeImage'),
 };
@@ -25,6 +26,10 @@ function initHomePage() {
 
   els.openLoggedAnalyses?.addEventListener('click', () => {
     window.location.href = '/logged-analyses.html';
+  });
+
+  els.openRiverAligner?.addEventListener('click', () => {
+    window.location.href = '/river-aligner.html';
   });
 }
 

@@ -13,5 +13,10 @@ __MACOSX/
 data/rivers/
 *.mat
 *.zip
-*.tif
-*.tiff
+
+# Accidental copies of large timelapse sets (not shipped)
+data/timelapse/103D5600/
+data/timelapse/117D5600/
+data/timelapse/aligned/
+data/timelapse/sub_data1/
+data/**/timelapse.mp4

@@ -139,6 +139,10 @@
           <input id="toggleSedimentSamples" type="checkbox" />
           Show sediment samples
         </label>
+        <label class="hud-toggle">
+          <input id="toggleTimelapseFlags" type="checkbox" />
+          Show timelapse cross-section markers
+        </label>
       </section>
 
       <aside id="viewerToolbar" class="viewer-toolbar" aria-label="Map tools">
@@ -199,6 +203,21 @@
           </div>
         </section>
       </aside>
+    </div>
+
+    <div id="timelapseModal" class="timelapse-modal is-hidden" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="timelapseModalTitle">
+      <div class="timelapse-modal-backdrop"></div>
+      <div class="timelapse-modal-panel shell-panel">
+        <header class="timelapse-modal-head">
+          <div>
+            <h3 id="timelapseModalTitle">Timelapse aligner</h3>
+            <p class="timelapse-modal-sub">Preview, align, save moments, and run change detection for this cross-section.</p>
+          </div>
+          <button id="closeTimelapseModal" type="button" class="inline-btn">Close</button>
+        </header>
+        <p id="timelapseModalStatus" class="timelapse-modal-status is-hidden" aria-live="polite"></p>
+        <iframe id="timelapseAlignerFrame" class="timelapse-modal-frame" title="Cross-section timelapse aligner" src="about:blank"></iframe>
+      </div>
     </div>
 
     <script type="module" src="/src/log-analysis.js"></script>

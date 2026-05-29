@@ -1,0 +1,2 @@
+# Timelapse demo images (~900MB total). Install Git LFS before clone/pull.
+data/timelapse/** filter=lfs diff=lfs merge=lfs -text

@@ -10,6 +10,12 @@ import {
   loadLoggedAnalysisPackage,
   saveLoggedAnalysisEntry,
 } from './analysisStore.js';
+import {
+  initCrossSectionTimelapse,
+  findTimelapseMapping,
+  buildTimelapseCardMarkup,
+  bindTimelapseCard,
+} from './crossSectionTimelapse.js';
 
 const PRELOADED_RIVER_SPOTS = [
   {
@@ -103,6 +109,7 @@ const els = {
   toggleEarthTerrainColors: document.getElementById('toggleEarthTerrainColors'),
   toggleVegetationTerrain: document.getElementById('toggleVegetationTerrain'),
   toggleSedimentSamples: document.getElementById('toggleSedimentSamples'),
+  toggleTimelapseFlags: document.getElementById('toggleTimelapseFlags'),
   preloadedRiverSpots: document.getElementById('preloadedRiverSpots'),
   resetView: document.getElementById('resetView'),
   viewerHomeBtn: document.getElementById('viewerHomeBtn'),
@@ -139,6 +146,9 @@ let clock;
 let groundBasePlane = null;
 
 let clickableMarkers = [];
+let timelapseFlagPickTargets = [];
+let timelapseFlagLayer = null;
+let showTimelapseFlags = false;
 let riverVideoPickTargets = [];
 let sedimentSamplePickTargets = [];
 let curtainMeshes = [];
@@ -165,6 +175,7 @@ let measurementStart = null;
 let measurementEnd = null;
 let measurementLine = null;
 let currentPackageData = null;
+let timelapseBeaconHeight = 3200;
 let currentPreloadedRiverId = DEFAULT_PRELOADED_RIVER_ID;
 let mapMeasurementSegments = [];
 const keyState = {
@@ -294,6 +305,14 @@ function setupUiEvents() {
     }
     const label = showSedimentSamples ? 'shown' : 'hidden';
     setStatus(`Sediment samples ${label}.`);
+  });
+
+  showTimelapseFlags = Boolean(els.toggleTimelapseFlags?.checked ?? false);
+  els.toggleTimelapseFlags?.addEventListener('change', () => {
+    showTimelapseFlags = Boolean(els.toggleTimelapseFlags.checked);
+    setTimelapseFlagVisibility(showTimelapseFlags);
+    const label = showTimelapseFlags ? 'shown' : 'hidden';
+    setStatus(`Timelapse cross-section markers ${label}.`);
   });
 
   els.toolSheetBtn?.addEventListener('click', () => {
@@ -2199,10 +2218,12 @@ function updateElevationVariantToggle(packageData) {
   els.toggleVegetationTerrain.checked = Boolean(useVegetationElevation && hasGef);
 }
 
-function loadPackage(data) {
+async function loadPackage(data) {
   if (!data || !data.river_banks || !Array.isArray(data.river_banks.points)) {
     throw new Error('Invalid package: missing river_banks.points');
   }
+
+  await initCrossSectionTimelapse();
 
   if (currentRiverGroup) {
     clearMapMeasurementSegments();
@@ -2212,6 +2233,8 @@ function loadPackage(data) {
   currentRiverGroup = new THREE.Group();
   currentPackageData = data;
   clickableMarkers = [];
+  timelapseFlagPickTargets = [];
+  timelapseFlagLayer = null;
   riverVideoPickTargets = [];
   sedimentSamplePickTargets = [];
   curtainMeshes = [];
@@ -2231,6 +2254,7 @@ function loadPackage(data) {
     x: meanOrZero(bbox.min_x, bbox.max_x),
     y: meanOrZero(bbox.min_y, bbox.max_y),
   };
+  timelapseBeaconHeight = computeTimelapseBeaconHeight(bbox);
   const matchedPreloaded = getPreloadedRiverById(data.river_id);
   currentPreloadedRiverId = matchedPreloaded?.id || null;
   renderPreloadedRiverSpots();
@@ -2287,6 +2311,19 @@ function loadPackage(data) {
 
   const crossSectionGroup = buildCrossSections(data.cross_sections || []);
   currentRiverGroup.add(crossSectionGroup);
+  timelapseFlagLayer = buildTimelapseFlags(data.cross_sections || [], data.river_id);
+  if (timelapseFlagLayer) {
+    currentRiverGroup.add(timelapseFlagLayer);
+    setTimelapseFlagVisibility(showTimelapseFlags);
+  }
+  if (els.toggleTimelapseFlags) {
+    const timelapseSiteCount = timelapseFlagPickTargets.filter(
+      (obj) => obj.userData?.objectType === 'timelapse-flag' && obj.isSprite,
+    ).length;
+    const beaconCount = timelapseSiteCount || Math.ceil(timelapseFlagPickTargets.length / 2);
+    els.toggleTimelapseFlags.disabled = beaconCount === 0;
+    els.toggleTimelapseFlags.checked = beaconCount > 0 && showTimelapseFlags;
+  }
 
   scene.add(currentRiverGroup);
   updateGroundGridForRiver(currentRiverGroup);
@@ -2306,9 +2343,16 @@ function loadPackage(data) {
   els.riverName.textContent = riverName;
   const sonarLabel = sonarCount > 0 ? `, ${sonarCount.toLocaleString()} sonar bottom points` : '';
   const videoLabel = videoCameraCount > 0 ? `, ${videoCameraCount} river video cameras` : '';
+  const timelapseSiteCount = timelapseFlagPickTargets.filter((obj) => obj.isSprite).length;
+  const timelapseLabel = timelapseSiteCount > 0
+    ? `, ${timelapseSiteCount} cross-section${timelapseSiteCount === 1 ? '' : 's'} with timelapse data`
+    : '';
   const sedimentLabel = sedimentCount > 0 ? `, ${sedimentCount.toLocaleString()} sediment samples` : '';
   const elevationLabel = elevationCellCount > 0 ? `, ${elevationCellCount.toLocaleString()} elevation cells` : '';
-  els.counts.textContent = `${bankPoints.length.toLocaleString()} bank points, ${mappedCount}/${sectionCount} mapped cross-sections${videoLabel}${sonarLabel}${sedimentLabel}${elevationLabel}`;
+  els.counts.textContent = `${bankPoints.length.toLocaleString()} bank points, ${mappedCount}/${sectionCount} mapped cross-sections${videoLabel}${timelapseLabel}${sonarLabel}${sedimentLabel}${elevationLabel}`;
+  if (timelapseSiteCount > 0) {
+    setStatus('Enable “Show timelapse cross-section markers” in the HUD to see purple beacons at sections with image data.');
+  }
   els.details.innerHTML = '<p>Click a cross-section marker to view a MATLAB-style cross-section plot and metadata.</p>';
   setCurtainVisibility(showColoredCrossSections);
   closeDetailsPanel();
@@ -3534,6 +3578,193 @@ function buildCrossSections(sections) {
   return group;
 }
 
+function setTimelapseFlagVisibility(visible) {
+  if (timelapseFlagLayer) {
+    timelapseFlagLayer.visible = visible;
+  }
+}
+
+function computeTimelapseBeaconHeight(bbox) {
+  const minX = Number(bbox?.min_x);
+  const maxX = Number(bbox?.max_x);
+  const minY = Number(bbox?.min_y);
+  const maxY = Number(bbox?.max_y);
+  if (![minX, maxX, minY, maxY].every(Number.isFinite)) return 3200;
+  const span = Math.max(maxX - minX, maxY - minY, 1);
+  return clamp(span * 0.11, 1800, 7200);
+}
+
+function buildTimelapseFlags(sections, riverId) {
+  if (!Array.isArray(sections) || sections.length === 0) return null;
+
+  const group = new THREE.Group();
+  const beaconH = timelapseBeaconHeight;
+  const poleRadius = clamp(beaconH * 0.0018, 4, 14);
+  const poleMaterial = new THREE.MeshStandardMaterial({
+    color: 0xc084fc,
+    emissive: 0x4a1578,
+    roughness: 0.35,
+    metalness: 0.12,
+    transparent: true,
+    opacity: 0.92,
+  });
+  const arrowMaterial = new THREE.MeshStandardMaterial({
+    color: 0xe9b8ff,
+    emissive: 0x6b21a8,
+    roughness: 0.3,
+    metalness: 0.08,
+  });
+  const baseRingMaterial = new THREE.MeshBasicMaterial({
+    color: 0xd8b4fe,
+    transparent: true,
+    opacity: 0.55,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+  });
+  const flagScale = clamp(beaconH * 0.028, 72, 220);
+
+  sections.forEach((section) => {
+    if (!section.line?.has_geometry) return;
+    const mapping = findTimelapseMapping(riverId, section);
+    if (!mapping) return;
+
+    const sx = Number(section.line.start_x) - worldCenter.x;
+    const sz = Number(section.line.start_y) - worldCenter.y;
+    const ex = Number(section.line.end_x) - worldCenter.x;
+    const ez = Number(section.line.end_y) - worldCenter.y;
+    const depthMean = section.mat_summary?.z_stats?.mean;
+    const bedY = Number.isFinite(depthMean) ? depthMean * 0.08 : 0;
+
+    const cx = (sx + ex) / 2;
+    const cz = (sz + ez) / 2;
+    const anchorY = bedY + 6;
+    const poleBottomY = anchorY + clamp(beaconH * 0.02, 24, 80);
+    const poleTopY = anchorY + beaconH;
+    const poleHeight = poleTopY - poleBottomY;
+
+    const baseRing = new THREE.Mesh(
+      new THREE.RingGeometry(clamp(beaconH * 0.006, 18, 48), clamp(beaconH * 0.009, 28, 64), 32),
+      baseRingMaterial,
+    );
+    baseRing.rotation.x = -Math.PI / 2;
+    baseRing.position.set(cx, anchorY + 0.5, cz);
+    baseRing.renderOrder = 10;
+    group.add(baseRing);
+
+    const downArrowH = clamp(beaconH * 0.055, 90, 260);
+    const downArrow = new THREE.Mesh(
+      new THREE.ConeGeometry(clamp(beaconH * 0.007, 16, 42), downArrowH, 12),
+      arrowMaterial,
+    );
+    downArrow.position.set(cx, anchorY + downArrowH * 0.5, cz);
+    downArrow.rotation.x = Math.PI;
+    group.add(downArrow);
+
+    const pole = new THREE.Mesh(
+      new THREE.CylinderGeometry(poleRadius, poleRadius * 0.88, poleHeight, 10),
+      poleMaterial,
+    );
+    pole.position.set(cx, poleBottomY + poleHeight / 2, cz);
+    group.add(pole);
+
+    const topArrowH = clamp(beaconH * 0.04, 70, 180);
+    const topArrow = new THREE.Mesh(
+      new THREE.ConeGeometry(clamp(beaconH * 0.0055, 12, 32), topArrowH, 12),
+      arrowMaterial,
+    );
+    topArrow.position.set(cx, poleTopY - topArrowH * 0.5, cz);
+    topArrow.rotation.x = Math.PI;
+    group.add(topArrow);
+
+    const flag = createTimelapseFlagSprite(flagScale);
+    flag.position.set(cx, poleTopY + flagScale * 0.35, cz);
+    flag.userData = {
+      section,
+      mapping,
+      objectType: 'timelapse-flag',
+    };
+    flag.name = `timelapse-flag-xs-${section.id}`;
+    timelapseFlagPickTargets.push(flag);
+    group.add(flag);
+
+    const pickSphere = new THREE.Mesh(
+      new THREE.SphereGeometry(flagScale * 0.55, 10, 10),
+      new THREE.MeshBasicMaterial({ visible: false }),
+    );
+    pickSphere.position.copy(flag.position);
+    pickSphere.userData = flag.userData;
+    pickSphere.name = `timelapse-flag-pick-${section.id}`;
+    timelapseFlagPickTargets.push(pickSphere);
+    group.add(pickSphere);
+
+    const marker = clickableMarkers.find((item) => item.userData?.section?.id === section.id);
+    if (marker?.material?.color) {
+      marker.material.color.setHex(0xb57cff);
+      if (marker.material.emissive?.setHex) {
+        marker.material.emissive.setHex(0x2a1048);
+      }
+    }
+  });
+
+  return timelapseFlagPickTargets.length > 0 ? group : null;
+}
+
+function createTimelapseFlagSprite(scale = 34) {
+  const size = 128;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) {
+    const fallback = new THREE.Sprite(new THREE.SpriteMaterial({ color: 0xb57cff }));
+    fallback.scale.set(scale, scale, 1);
+    fallback.renderOrder = 14;
+    return fallback;
+  }
+
+  const cx = size / 2;
+  const pinTop = size * 0.22;
+
+  ctx.clearRect(0, 0, size, size);
+
+  ctx.fillStyle = 'rgba(168, 85, 247, 0.98)';
+  ctx.strokeStyle = 'rgba(233, 198, 255, 0.95)';
+  ctx.lineWidth = 5;
+  ctx.beginPath();
+  ctx.arc(cx, pinTop + 22, 24, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.fillStyle = 'rgba(124, 58, 237, 0.98)';
+  ctx.beginPath();
+  ctx.moveTo(cx, size * 0.88);
+  ctx.lineTo(cx - 18, pinTop + 38);
+  ctx.lineTo(cx + 18, pinTop + 38);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.fillStyle = '#f8f0ff';
+  ctx.font = 'bold 28px IBM Plex Sans, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('T', cx, pinTop + 24);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.needsUpdate = true;
+  const material = new THREE.SpriteMaterial({
+    map: texture,
+    transparent: true,
+    depthWrite: false,
+    depthTest: false,
+    color: 0xffffff,
+  });
+
+  const sprite = new THREE.Sprite(material);
+  sprite.scale.set(scale, scale, 1);
+  sprite.renderOrder = 14;
+  return sprite;
+}
+
 function buildRiverVideoIcons(bankPoints) {
   if (!Array.isArray(bankPoints) || bankPoints.length === 0) return null;
   if (TIMELAPSE_VIDEO_ASSETS.length === 0) return null;
@@ -3921,7 +4152,12 @@ function onPointerDown(event) {
   mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
 
   raycaster.setFromCamera(mouse, camera);
-  const pickTargets = [...clickableMarkers, ...riverVideoPickTargets, ...sedimentSamplePickTargets];
+  const pickTargets = [
+    ...(showTimelapseFlags ? timelapseFlagPickTargets : []),
+    ...clickableMarkers,
+    ...riverVideoPickTargets,
+    ...sedimentSamplePickTargets,
+  ];
   if (bankMigrationArrowLayer) pickTargets.push(bankMigrationArrowLayer);
   const hits = raycaster.intersectObjects(pickTargets, false);
 
@@ -3951,6 +4187,15 @@ function onPointerDown(event) {
     if (renderSedimentSampleDetails(hit.userData)) {
       openDetailsPanel();
     }
+    return;
+  }
+  if (objectType === 'timelapse-flag') {
+    const section = hit.userData.section;
+    if (!section) return;
+    selectedSection = section;
+    highlightMarker(hit);
+    renderCrossSectionDetails(section);
+    openDetailsPanel();
     return;
   }
 
@@ -4208,7 +4453,19 @@ function renderMigrationArrowDetails(hit) {
 
 function highlightMarker(active) {
   clickableMarkers.forEach((marker) => {
-    marker.material.color.setHex(marker === active ? 0x8ce8ff : 0x56c3ff);
+    const hasTimelapse = findTimelapseMapping(currentPackageData?.river_id, marker.userData?.section);
+    const base = hasTimelapse ? 0xb57cff : 0x56c3ff;
+    const activeColor = hasTimelapse ? 0xe4c4ff : 0x8ce8ff;
+    marker.material.color.setHex(marker === active ? activeColor : base);
+  });
+  timelapseFlagPickTargets.forEach((flag) => {
+    if (!flag.material?.color) return;
+    const isActive = flag === active
+      || (active?.userData?.section?.id && active.userData.section.id === flag.userData?.section?.id);
+    flag.material.color.setHex(isActive ? 0xf3e8ff : 0xffffff);
+    if (flag.material.opacity !== undefined) {
+      flag.material.opacity = isActive ? 1 : 0.94;
+    }
   });
   sedimentSamplePickTargets.forEach((marker) => {
     marker.material.color.setHex(marker === active ? 0xffefac : 0xf8d371);
@@ -4344,7 +4601,8 @@ function buildSedimentGrainSizePlot(distribution) {
   `;
 }
 
-function renderCrossSectionDetails(section) {
+async function renderCrossSectionDetails(section) {
+  await initCrossSectionTimelapse();
   const stats = section.mat_summary?.velocity?.stats || {};
   const zStats = section.mat_summary?.z_stats || {};
   const velocityGrid = section.mat_summary?.velocity?.sample;
@@ -4389,6 +4647,8 @@ function renderCrossSectionDetails(section) {
       <button id="addSectionToSheetBtn" type="button">Add cross-section to sheet</button>
     </div>
   `;
+  const timelapseMapping = findTimelapseMapping(currentPackageData?.river_id, section);
+  const timelapseCardMarkup = buildTimelapseCardMarkup(timelapseMapping, section, currentPackageData?.river_id);
 
   destroyCrossSectionInteractivePlot();
   els.details.innerHTML = `
@@ -4408,6 +4668,8 @@ function renderCrossSectionDetails(section) {
         >${escapeHtml(noteValue)}</textarea>
         <p id="crossSectionNotesStatus" class="cs-note-status">${noteLen > 0 ? `${noteLen} chars saved` : 'No notes yet'}</p>
       </section>
+
+      ${timelapseCardMarkup}
 
       <section class="cs-card cs-profile-card">
         <div class="cs-card-head">
@@ -4464,6 +4726,15 @@ function renderCrossSectionDetails(section) {
 
   bindCrossSectionNotesInput(section);
   bindAddSectionToSheetButton(section);
+  if (timelapseMapping) {
+    bindTimelapseCard(els.details, {
+      mapping: timelapseMapping,
+      section,
+      riverId: currentPackageData?.river_id,
+      onError: (message) => setStatus(message),
+      onStatus: (message) => setStatus(message),
+    });
+  }
 }
 
 function bindCrossSectionNotesInput(section) {
