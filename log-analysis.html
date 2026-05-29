@@ -158,6 +158,14 @@
             <path d="M15 13L14 12" stroke="currentColor" stroke-width="1.8"></path>
           </svg>
         </button>
+        <button id="toolVideoBtn" class="viewer-tool-btn" type="button" title="Place timelapse video marker" aria-label="Place timelapse video marker">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <rect x="3.5" y="6.2" width="11.6" height="11.6" rx="2.2" stroke="currentColor" stroke-width="1.8"></rect>
+            <path d="M10.5 12L8.3 10.6V13.4L10.5 12Z" fill="currentColor"></path>
+            <path d="M15.1 10.1L20.5 7.8V16.2L15.1 13.9V10.1Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"></path>
+          </svg>
+        </button>
+        <input id="toolVideoFileInput" class="hidden-file-input" type="file" accept="video/*,.mp4,.mov,.m4v,.webm,.ogg" />
       </aside>
 
       <aside id="sheetPanel" class="sheet-panel is-hidden" aria-hidden="true">
@@ -199,6 +207,21 @@
           </div>
         </section>
       </aside>
+    </div>
+
+    <div id="timelapseModal" class="timelapse-modal is-hidden" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="timelapseModalTitle">
+      <div class="timelapse-modal-backdrop"></div>
+      <div class="timelapse-modal-panel shell-panel">
+        <header class="timelapse-modal-head">
+          <div>
+            <h3 id="timelapseModalTitle">Timelapse aligner</h3>
+            <p class="timelapse-modal-sub">Preview, align, save moments, and run change detection for this cross-section.</p>
+          </div>
+          <button id="closeTimelapseModal" type="button" class="inline-btn">Close</button>
+        </header>
+        <p id="timelapseModalStatus" class="timelapse-modal-status is-hidden" aria-live="polite"></p>
+        <iframe id="timelapseAlignerFrame" class="timelapse-modal-frame" title="Cross-section timelapse aligner" src="about:blank"></iframe>
+      </div>
     </div>
 
     <script type="module" src="/src/log-analysis.js"></script>

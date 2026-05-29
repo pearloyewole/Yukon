@@ -4,9 +4,13 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "setup": "npm install && npm run aligner:install",
     "dev": "vite",
     "dev:frontend": "vite",
     "dev:backend": "npm --prefix backend run dev",
+    "dev:aligner": "python3 aligner-server/aligner.py",
+    "aligner:install": "python3 -m pip install -r aligner-server/requirements.txt",
+    "data:sync": "node scripts/sync-timelapse-data.mjs",
     "backend:install": "npm --prefix backend install",
     "build": "vite build",
     "preview": "vite preview"

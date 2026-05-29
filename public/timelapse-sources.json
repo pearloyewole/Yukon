@@ -1,0 +1,69 @@
+{
+  "version": 2,
+  "description": "Cross-section → folder under data/timelapse (7, 8, and 60 image demos only).",
+  "mappings": [
+    {
+      "river_id": "alakanuk",
+      "section_id": 1,
+      "label": "Alakanuk site A (7 frames)",
+      "image_root": "alakanuk_site_a",
+      "date_folders": []
+    },
+    {
+      "river_id": "alakanuk",
+      "section_id": 2,
+      "label": "Alakanuk site B (8 frames)",
+      "image_root": "alakanuk_site_b",
+      "date_folders": []
+    },
+    {
+      "river_id": "alakanuk",
+      "section_id": 3,
+      "label": "River sequence (60 frames)",
+      "image_root": "sequence_60",
+      "date_folders": []
+    },
+    {
+      "river_id": "huslia",
+      "section_id": 1,
+      "label": "Alakanuk site B (8 frames)",
+      "image_root": "alakanuk_site_b",
+      "date_folders": []
+    },
+    {
+      "river_id": "huslia",
+      "section_id": 2,
+      "label": "River sequence (60 frames)",
+      "image_root": "sequence_60",
+      "date_folders": []
+    },
+    {
+      "river_id": "huslia",
+      "section_id": 3,
+      "label": "Alakanuk site A (7 frames)",
+      "image_root": "alakanuk_site_a",
+      "date_folders": []
+    },
+    {
+      "river_id": "beaver",
+      "section_id": 1,
+      "label": "River sequence (60 frames)",
+      "image_root": "sequence_60",
+      "date_folders": []
+    },
+    {
+      "river_id": "beaver",
+      "section_id": 2,
+      "label": "Alakanuk site B (8 frames)",
+      "image_root": "alakanuk_site_b",
+      "date_folders": []
+    },
+    {
+      "river_id": "beaver",
+      "section_id": 3,
+      "label": "Alakanuk site A (7 frames)",
+      "image_root": "alakanuk_site_a",
+      "date_folders": []
+    }
+  ]
+}

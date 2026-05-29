@@ -1,0 +1,1118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>[YUKON] River Images Aligner</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;600;700&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/src/river-aligner/yukon-aligner.css">
+</head>
+<body>
+<div class="app-root">
+  <div class="onboarding-grid" aria-hidden="true"></div>
+
+  <header class="top-header">
+    <div class="top-header-brand">YUKON</div>
+    <span class="top-header-sub" style="font-size:0.82rem;color:var(--muted);letter-spacing:0.06em">River images aligner</span>
+    <div class="top-header-spacer"></div>
+    <button type="button" class="inline-btn top-header-home" onclick="window.location.href='/'">Home</button>
+    <div class="workspace-tabs" role="tablist" aria-label="Workspaces">
+      <button type="button" class="workspace-tab is-active" role="tab" aria-selected="true"
+              data-workspace="aligner" id="tabAligner">Timelapse Aligner</button>
+      <button type="button" class="workspace-tab" role="tab" aria-selected="false"
+              data-workspace="change" id="tabChange">Change Detector</button>
+    </div>
+  </header>
+
+  <!-- Timelapse Aligner -->
+  <div id="workspaceAligner" class="workspace" role="tabpanel" aria-labelledby="tabAligner">
+    <div class="main-grid">
+      <aside class="config-panel shell-panel">
+        <section class="section">
+          <h3 class="section-title">Source</h3>
+          <label class="field-label" for="folderPath">Image folder</label>
+          <div class="folder-row">
+            <input type="text" id="folderPath" placeholder="/path/to/river/images">
+            <button type="button" class="btn-secondary inline-btn" onclick="previewFolder()">Preview</button>
+          </div>
+          <p class="section-hint">Absolute path on this machine. The server reads files locally.</p>
+        </section>
+
+        <section class="section">
+          <h3 class="section-title">Alignment mode</h3>
+          <div class="align-mode-grid" role="group" aria-label="Alignment mode">
+            <button type="button" class="align-mode-chip is-active" data-mode="general" onclick="selectMode('general')">General</button>
+            <button type="button" class="align-mode-chip" data-mode="select" onclick="selectMode('select')">Select</button>
+            <button type="button" class="align-mode-chip" data-mode="custom" onclick="selectMode('custom')">Custom</button>
+            <button type="button" class="align-mode-chip" data-mode="timefilter" onclick="selectMode('timefilter')">Daily time</button>
+          </div>
+          <p class="mode-desc" id="modeDesc"></p>
+        </section>
+
+        <section class="section hidden" id="timefilterPanel">
+          <h3 class="section-title">Time slots</h3>
+          <p class="section-hint">HH:MM format, one frame per day per slot (within tolerance).</p>
+          <div id="slotList"></div>
+          <button type="button" class="btn-secondary full-width" onclick="addSlot()">Add time slot</button>
+          <div class="subsection opt-row">
+            <div>
+              <label class="field-label" for="toleranceMin">Tolerance (minutes)</label>
+              <input type="number" id="toleranceMin" value="45" min="1" max="360">
+            </div>
+            <div style="display:flex;align-items:flex-end;padding-bottom:4px">
+              <label style="display:flex;align-items:center;gap:8px;font-size:0.82rem;color:var(--muted);cursor:pointer">
+                <input type="checkbox" id="cropView" style="width:14px;height:14px;accent-color:var(--accent)">
+                Crop to ROI
+              </label>
+            </div>
+          </div>
+        </section>
+
+        <section class="section">
+          <h3 class="section-title">Output</h3>
+          <div class="opt-row">
+            <div>
+              <label class="field-label" for="outputFormat">Format</label>
+              <select id="outputFormat">
+                <option value="gif">GIF (preview)</option>
+                <option value="mp4" selected>MP4 (video)</option>
+              </select>
+            </div>
+            <div>
+              <label class="field-label" for="fps">FPS</label>
+              <input type="number" id="fps" value="4" min="1" max="30">
+            </div>
+          </div>
+          <p class="section-hint">MP4 is required for Change Detector and saved moments.</p>
+        </section>
+
+        <section class="section">
+          <button type="button" id="runBtn" class="btn-primary" onclick="runJob()">Generate timelapse</button>
+          <div id="progressWrap" class="progress-wrap" hidden>
+            <div class="prog-bar-bg"><div class="prog-bar-fill" id="progFill"></div></div>
+            <div class="prog-msg" id="progMsg">Starting...</div>
+          </div>
+        </section>
+      </aside>
+
+      <section class="preview-panel shell-panel">
+        <div class="panel-head">
+          <h2 id="alignerPreviewTitle">Preview</h2>
+          <div class="head-actions hidden" id="roiControls">
+            <button type="button" class="btn-secondary inline-btn" onclick="clearRois()">Clear ROIs</button>
+            <button type="button" class="btn-secondary inline-btn" onclick="confirmRois()">Confirm ROIs</button>
+          </div>
+        </div>
+        <div class="panel-body">
+          <div class="empty-state" id="alignerPlaceholder">
+            <h3>No preview yet</h3>
+            <p>Enter a folder path and click <strong>Preview</strong> to load the first image. Configure alignment mode, then click <strong>Generate timelapse</strong>.</p>
+          </div>
+          <canvas id="roiCanvas"></canvas>
+          <div id="roiList"></div>
+
+          <div id="resultWrap">
+            <img id="previewGif" src="" alt="Timelapse preview" class="hidden">
+            <div id="videoWrap" class="video-wrap">
+              <div id="videoRoiWrap">
+                <video id="previewVideo" preload="auto" tabindex="0">
+                  <source id="videoSrc" src="" type="video/mp4">
+                </video>
+              </div>
+              <div class="player-bar">
+                <button type="button" id="playBtn" class="player-btn inline-btn" onclick="togglePlay('aligner')" title="Play / Pause">Play</button>
+                <input type="range" id="scrubBar" min="0" max="1000" value="0" step="1"
+                       oninput="onScrub('aligner', this.value)" onmousedown="isScrubbing=true" onmouseup="isScrubbing=false">
+                <span id="timeDisplay" class="time-display">0:00 / 0:00</span>
+                <button type="button" id="saveMomentBtn" class="player-btn inline-btn" onclick="saveMoment()" title="Save moment (S)">Save moment</button>
+                <button type="button" id="muteBtn" class="player-btn inline-btn" onclick="toggleMute('aligner')" title="Mute / Unmute">Mute</button>
+              </div>
+            </div>
+            <div class="download-row">
+              <a id="dlLink" class="download-link" href="#" download>Download result</a>
+            </div>
+            <div id="momentsPanel" class="moments-block">
+              <div class="moments-header">
+                <h3>Saved moments</h3>
+                <span id="momentCount">0</span>
+              </div>
+              <div id="momentsGrid"></div>
+              <div id="momentsEmpty">No moments saved yet. Pause the video and click Save moment.</div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <!-- Change Detector -->
+  <div id="workspaceChange" class="workspace" role="tabpanel" aria-labelledby="tabChange" hidden>
+    <div class="main-grid">
+      <aside class="config-panel shell-panel">
+        <section class="section">
+          <h3 class="section-title">Output video</h3>
+          <div id="changeOutputSummary" class="output-summary">
+            <strong>No timelapse loaded</strong>
+            <p class="muted">Generate an MP4 in Timelapse Aligner, then return here.</p>
+          </div>
+          <button type="button" class="btn-secondary full-width" style="margin-top:10px" onclick="setWorkspace('aligner')">Go to Timelapse Aligner</button>
+        </section>
+
+        <section class="section hidden" id="changeConfigSection">
+          <h3 class="section-title">Analysis region</h3>
+          <p class="change-help">Draw a box on the bank or fixed features (not open water). The tool flags time ranges with unusual change in that region.</p>
+          <div class="change-toolbar">
+            <button type="button" class="btn-secondary inline-btn" id="changeDrawToggle" onclick="toggleChangeDrawMode()">Draw region</button>
+            <button type="button" class="btn-secondary inline-btn" onclick="clearChangeRoi()">Clear region</button>
+          </div>
+        </section>
+
+        <section class="section hidden" id="changeParamsSection">
+          <h3 class="section-title">Parameters</h3>
+          <div class="opt-row-3">
+            <div>
+              <label class="field-label" for="changeSensitivity">Sensitivity</label>
+              <input type="number" id="changeSensitivity" value="2" min="0.5" max="10" step="0.5">
+            </div>
+            <div>
+              <label class="field-label" for="changeMinSeg">Min segment (s)</label>
+              <input type="number" id="changeMinSeg" value="2" min="0.5" max="60" step="0.5">
+            </div>
+            <div>
+              <label class="field-label" for="changePad">Clip padding (s)</label>
+              <input type="number" id="changePad" value="1.5" min="0" max="30" step="0.5">
+            </div>
+          </div>
+        </section>
+
+        <section class="section hidden" id="changeActionsSection">
+          <button type="button" class="btn-primary" id="runChangeBtn" onclick="runChangeDetection()">Run change detection</button>
+          <div id="changeProgWrap" class="progress-wrap" hidden>
+            <div class="prog-bar-bg"><div class="prog-bar-fill" id="changeProgFill"></div></div>
+            <div class="prog-msg" id="changeProgMsg">...</div>
+          </div>
+        </section>
+      </aside>
+
+      <section class="preview-panel shell-panel">
+        <div class="panel-head">
+          <h2>Change analysis</h2>
+        </div>
+        <div class="panel-body">
+          <div class="empty-state" id="changePlaceholder">
+            <h3>No MP4 available</h3>
+            <p>Change detection requires an MP4 timelapse. Generate one in Timelapse Aligner first.</p>
+            <button type="button" class="btn-secondary inline-btn" style="margin-top:12px" onclick="setWorkspace('aligner')">Go to Timelapse Aligner</button>
+          </div>
+
+          <div id="changeResultWrap" class="hidden" style="width:100%">
+            <div id="changeVideoWrap" class="video-wrap is-visible">
+              <div id="changeVideoRoiWrap">
+                <video id="changePreviewVideo" preload="auto" tabindex="0">
+                  <source id="changeVideoSrc" src="" type="video/mp4">
+                </video>
+                <canvas id="changeRoiCanvas"></canvas>
+              </div>
+              <div class="player-bar">
+                <button type="button" id="changePlayBtn" class="player-btn inline-btn" onclick="togglePlay('change')" title="Play / Pause">Play</button>
+                <input type="range" id="changeScrubBar" min="0" max="1000" value="0" step="1"
+                       oninput="onScrub('change', this.value)" onmousedown="changeScrubbing=true" onmouseup="changeScrubbing=false">
+                <span id="changeTimeDisplay" class="time-display">0:00 / 0:00</span>
+                <button type="button" id="changeMuteBtn" class="player-btn inline-btn" onclick="toggleMute('change')" title="Mute / Unmute">Mute</button>
+              </div>
+            </div>
+            <div id="changeSparkWrap">
+              <div class="section-hint" style="margin-bottom:4px">ROI activity (smoothed)</div>
+              <svg id="changeSpark" viewBox="0 0 400 56" preserveAspectRatio="none"></svg>
+            </div>
+            <div id="changeSegments" style="margin-top:12px"></div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+</div>
+
+<script>
+const MODE_DESCS = {
+  general: 'Full frame alignment. Stable bank band excludes sky and water automatically.',
+  select: 'Draw ROI boxes on the preview image. Alignment uses those areas; output is cropped to the first ROI.',
+  custom: 'Draw ROI boxes on fixed features (e.g. river walls). Full frame output; alignment follows those features.',
+  timefilter: 'One frame per day per time slot (within tolerance). Optionally use ROIs to focus alignment and crop output.',
+};
+
+const PLAYERS = {
+  aligner: {
+    videoId: 'previewVideo',
+    srcId: 'videoSrc',
+    playBtnId: 'playBtn',
+    scrubId: 'scrubBar',
+    timeId: 'timeDisplay',
+    muteId: 'muteBtn',
+    wrapId: 'videoWrap',
+  },
+  change: {
+    videoId: 'changePreviewVideo',
+    srcId: 'changeVideoSrc',
+    playBtnId: 'changePlayBtn',
+    scrubId: 'changeScrubBar',
+    timeId: 'changeTimeDisplay',
+    muteId: 'changeMuteBtn',
+    wrapId: 'changeVideoWrap',
+  },
+};
+
+let activeWorkspace = 'aligner';
+let currentMode = 'general';
+let rois = [];
+let drawing = false;
+let startX, startY;
+const COLORS = ['#a7deff', '#6a9fc7', '#98bfdc', '#c8e8ff', '#7eb8e8'];
+let firstImageB64 = null;
+let canvasImg = new window.Image();
+let pollTimer = null;
+let currentResult = null;
+let isScrubbing = false;
+let changeScrubbing = false;
+let changeRoi = null;
+let changeDrawMode = false;
+let changeDrawing = false;
+let changeStartX = 0;
+let changeStartY = 0;
+let changeTempRoi = null;
+let changePollTimer = null;
+let clipTimeUpdateHandler = null;
+const playerInited = { aligner: false, change: false };
+
+let slots = ['08:00'];
+
+document.getElementById('modeDesc').textContent = MODE_DESCS.general;
+
+function setWorkspace(name) {
+  activeWorkspace = name;
+  const alignerEl = document.getElementById('workspaceAligner');
+  const changeEl = document.getElementById('workspaceChange');
+  alignerEl.hidden = name !== 'aligner';
+  changeEl.hidden = name !== 'change';
+
+  document.querySelectorAll('.workspace-tab').forEach((tab) => {
+    const active = tab.dataset.workspace === name;
+    tab.classList.toggle('is-active', active);
+    tab.setAttribute('aria-selected', active ? 'true' : 'false');
+  });
+
+  if (name === 'change') {
+    onEnterChangeWorkspace();
+  }
+}
+
+function onEnterChangeWorkspace() {
+  updateChangeWorkspaceUi();
+  if (currentResult && currentResult.file && currentResult.file.endsWith('.mp4')) {
+    const streamUrl = '/aligner-api/stream?path=' + encodeURIComponent(currentResult.file);
+    initPlayer(streamUrl, 'change');
+    setTimeout(syncChangeRoiCanvas, 200);
+  }
+}
+
+function updateChangeWorkspaceUi() {
+  const summary = document.getElementById('changeOutputSummary');
+  const placeholder = document.getElementById('changePlaceholder');
+  const resultWrap = document.getElementById('changeResultWrap');
+  const config = document.getElementById('changeConfigSection');
+  const params = document.getElementById('changeParamsSection');
+  const actions = document.getElementById('changeActionsSection');
+
+  if (!currentResult || !currentResult.file) {
+    summary.innerHTML = '<strong>No timelapse loaded</strong><p class="muted">Generate an MP4 in Timelapse Aligner, then return here.</p>';
+    placeholder.classList.remove('hidden');
+    resultWrap.classList.add('hidden');
+    config.classList.add('hidden');
+    params.classList.add('hidden');
+    actions.classList.add('hidden');
+    return;
+  }
+
+  const name = currentResult.file.split('/').pop();
+  if (!currentResult.file.endsWith('.mp4')) {
+    summary.innerHTML = `<strong>${escapeHtml(name)}</strong><p class="muted">GIF output cannot be used for change detection. Re-run with MP4 selected.</p>`;
+    placeholder.classList.remove('hidden');
+    resultWrap.classList.add('hidden');
+    config.classList.add('hidden');
+    params.classList.add('hidden');
+    actions.classList.add('hidden');
+    return;
+  }
+
+  summary.innerHTML = `<strong>${escapeHtml(name)}</strong><p class="muted">${currentResult.count || 0} frames at ${currentResult.fps || 4} fps. Draw a region on the video, then run analysis.</p>`;
+  placeholder.classList.add('hidden');
+  resultWrap.classList.remove('hidden');
+  config.classList.remove('hidden');
+  params.classList.remove('hidden');
+  actions.classList.remove('hidden');
+}
+
+function resetChangeAnalysisState() {
+  changeRoi = null;
+  changeDrawMode = false;
+  changeDrawing = false;
+  changeTempRoi = null;
+  const canvas = document.getElementById('changeRoiCanvas');
+  if (canvas) canvas.classList.remove('active');
+  const toggle = document.getElementById('changeDrawToggle');
+  if (toggle) toggle.textContent = 'Draw region';
+  document.getElementById('changeSegments').innerHTML = '';
+  document.getElementById('changeSparkWrap').classList.remove('is-visible');
+  drawChangeRoiOverlay();
+}
+
+function renderSlots() {
+  const el = document.getElementById('slotList');
+  el.innerHTML = slots.map((s, i) => `
+    <div class="slot-row">
+      <input type="time" value="${s}" step="60" onchange="slots[${i}]=this.value">
+      <button type="button" class="btn-secondary inline-btn btn-remove" onclick="removeSlot(${i})">Remove</button>
+    </div>`).join('');
+}
+
+function addSlot() {
+  slots.push('12:00');
+  renderSlots();
+}
+
+function removeSlot(i) {
+  if (slots.length === 1) return;
+  slots.splice(i, 1);
+  renderSlots();
+}
+
+function selectMode(m) {
+  currentMode = m;
+  document.querySelectorAll('.align-mode-chip').forEach((t) => {
+    t.classList.toggle('is-active', t.dataset.mode === m);
+  });
+  document.getElementById('modeDesc').textContent = MODE_DESCS[m];
+  const needRoi = (m === 'select' || m === 'custom' || m === 'timefilter');
+  const showTimeCfg = (m === 'timefilter');
+  document.getElementById('timefilterPanel').classList.toggle('hidden', !showTimeCfg);
+  document.getElementById('roiControls').classList.toggle('hidden', !(needRoi && firstImageB64));
+  if (firstImageB64) showCanvas(needRoi);
+  if (showTimeCfg) renderSlots();
+}
+
+async function previewFolder() {
+  const folder = document.getElementById('folderPath').value.trim();
+  if (!folder) { alert('Please enter a folder path.'); return; }
+  try {
+    const r = await fetch('/aligner-api/preview?folder=' + encodeURIComponent(folder));
+    const text = await r.text();
+    if (!r.ok) {
+      alert(r.status === 500 && !text.trim()
+        ? 'Aligner server unavailable. Restart npm run dev and check the terminal for [aligner] errors.'
+        : `Preview failed (${r.status}): ${text || r.statusText}`);
+      return;
+    }
+    const d = JSON.parse(text);
+    if (d.error) { alert(d.error); return; }
+    firstImageB64 = d.image_b64;
+    document.getElementById('roiCanvas').style.display = 'none';
+    const needRoi = (currentMode === 'select' || currentMode === 'custom' || currentMode === 'timefilter');
+    showCanvas(needRoi);
+    document.getElementById('roiControls').classList.toggle('hidden', !needRoi);
+    document.getElementById('alignerPlaceholder').classList.add('hidden');
+    document.getElementById('resultWrap').classList.remove('is-visible');
+    document.getElementById('alignerPreviewTitle').textContent = `Preview - ${d.count} images`;
+  } catch (e) {
+    alert('Error: ' + e);
+  }
+}
+
+function showCanvas(interactive) {
+  const canvas = document.getElementById('roiCanvas');
+  canvas.style.display = 'block';
+  canvasImg.onload = () => {
+    canvas.width = canvasImg.naturalWidth;
+    canvas.height = canvasImg.naturalHeight;
+    drawCanvas();
+  };
+  canvasImg.src = 'data:image/jpeg;base64,' + firstImageB64;
+  if (interactive) {
+    canvas.onmousedown = startDraw;
+    canvas.onmousemove = onDraw;
+    canvas.onmouseup = endDraw;
+    canvas.style.cursor = 'crosshair';
+  } else {
+    canvas.onmousedown = canvas.onmousemove = canvas.onmouseup = null;
+    canvas.style.cursor = 'default';
+    rois = [];
+    drawCanvas();
+  }
+}
+
+function drawCanvas() {
+  const canvas = document.getElementById('roiCanvas');
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(canvasImg, 0, 0);
+  rois.forEach((r, i) => {
+    ctx.strokeStyle = COLORS[i % COLORS.length];
+    ctx.lineWidth = 3;
+    ctx.strokeRect(r.x * canvas.width, r.y * canvas.height, r.w * canvas.width, r.h * canvas.height);
+    ctx.fillStyle = COLORS[i % COLORS.length] + '44';
+    ctx.fillRect(r.x * canvas.width, r.y * canvas.height, r.w * canvas.width, r.h * canvas.height);
+    ctx.fillStyle = COLORS[i % COLORS.length];
+    ctx.font = 'bold 14px IBM Plex Mono, monospace';
+    ctx.fillText('ROI ' + (i + 1), r.x * canvas.width + 6, r.y * canvas.height + 18);
+  });
+  updateRoiList();
+}
+
+function getCanvasPos(e) {
+  const canvas = document.getElementById('roiCanvas');
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  return { x: (e.clientX - rect.left) * scaleX, y: (e.clientY - rect.top) * scaleY };
+}
+
+let tempRoi = null;
+
+function startDraw(e) { drawing = true; const p = getCanvasPos(e); startX = p.x; startY = p.y; }
+function onDraw(e) {
+  if (!drawing) return;
+  const p = getCanvasPos(e);
+  const canvas = document.getElementById('roiCanvas');
+  tempRoi = {
+    x: Math.min(startX, p.x) / canvas.width,
+    y: Math.min(startY, p.y) / canvas.height,
+    w: Math.abs(p.x - startX) / canvas.width,
+    h: Math.abs(p.y - startY) / canvas.height,
+  };
+  drawCanvas();
+  const ctx = canvas.getContext('2d');
+  ctx.strokeStyle = '#ffffff88';
+  ctx.lineWidth = 2;
+  ctx.setLineDash([6, 3]);
+  ctx.strokeRect(Math.min(startX, p.x), Math.min(startY, p.y), Math.abs(p.x - startX), Math.abs(p.y - startY));
+  ctx.setLineDash([]);
+}
+function endDraw(e) {
+  if (!drawing) return;
+  drawing = false;
+  if (tempRoi && tempRoi.w > 0.01 && tempRoi.h > 0.01) { rois.push(tempRoi); tempRoi = null; }
+  drawCanvas();
+}
+function clearRois() { rois = []; drawCanvas(); }
+function confirmRois() {
+  if (rois.length === 0) { alert('Please draw at least one ROI box on the image.'); return; }
+  alert(`Confirmed ${rois.length} ROI(s). Click Generate timelapse when ready.`);
+}
+
+function updateRoiList() {
+  const el = document.getElementById('roiList');
+  if (rois.length === 0) { el.innerHTML = ''; return; }
+  el.innerHTML = rois.map((r, i) => `<div class="roi-item">
+    <div class="roi-dot" style="background:${COLORS[i % COLORS.length]}"></div>
+    ROI ${i + 1}: x=${(r.x * 100).toFixed(0)}% y=${(r.y * 100).toFixed(0)}% w=${(r.w * 100).toFixed(0)}% h=${(r.h * 100).toFixed(0)}%
+  </div>`).join('');
+}
+
+async function runJob() {
+  const folder = document.getElementById('folderPath').value.trim();
+  if (!folder) { alert('Please enter a folder path.'); return; }
+  if ((currentMode === 'select' || currentMode === 'custom') && rois.length === 0) {
+    alert('Please draw at least one ROI box, then click Confirm ROIs.'); return;
+  }
+  if (currentMode === 'timefilter' && slots.length === 0) {
+    alert('Please add at least one time slot.'); return;
+  }
+  document.getElementById('runBtn').disabled = true;
+  document.getElementById('resultWrap').classList.remove('is-visible');
+  const progressWrap = document.getElementById('progressWrap');
+  progressWrap.hidden = false;
+  document.getElementById('progFill').style.width = '0%';
+  document.getElementById('progMsg').textContent = 'Submitting...';
+
+  const payload = {
+    folder,
+    mode: currentMode,
+    rois,
+    format: document.getElementById('outputFormat').value,
+    fps: parseInt(document.getElementById('fps').value, 10) || 4,
+    time_slots: currentMode === 'timefilter' ? slots.slice() : [],
+    tolerance_min: parseInt(document.getElementById('toleranceMin').value, 10) || 45,
+    crop_view: currentMode === 'timefilter' && document.getElementById('cropView').checked,
+  };
+  await fetch('/aligner-api/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+  pollTimer = setInterval(pollStatus, 800);
+}
+
+async function pollStatus() {
+  const r = await fetch('/aligner-api/status');
+  const d = await r.json();
+  const pct = d.total > 0 ? Math.round(d.progress / d.total * 100) : 0;
+  document.getElementById('progFill').style.width = pct + '%';
+  document.getElementById('progMsg').textContent = d.message || '';
+  if (d.status === 'done') {
+    clearInterval(pollTimer);
+    document.getElementById('runBtn').disabled = false;
+    document.getElementById('progressWrap').hidden = true;
+    showResult(d.result);
+  } else if (d.status === 'error') {
+    clearInterval(pollTimer);
+    document.getElementById('runBtn').disabled = false;
+    document.getElementById('progressWrap').hidden = true;
+    alert('Error: ' + d.message);
+  }
+}
+
+function fmtTime(s) {
+  if (!isFinite(s)) return '0:00';
+  const m = Math.floor(s / 60);
+  const sec = Math.floor(s % 60);
+  return `${m}:${sec.toString().padStart(2, '0')}`;
+}
+
+function getVideo(key) {
+  return document.getElementById(PLAYERS[key].videoId);
+}
+
+function setPlayButtonLabel(key, playing) {
+  document.getElementById(PLAYERS[key].playBtnId).textContent = playing ? 'Pause' : 'Play';
+}
+
+function togglePlay(key) {
+  const v = getVideo(key);
+  if (v.paused) { v.play(); setPlayButtonLabel(key, true); }
+  else { v.pause(); setPlayButtonLabel(key, false); }
+}
+
+function toggleMute(key) {
+  const cfg = PLAYERS[key];
+  const v = getVideo(key);
+  v.muted = !v.muted;
+  document.getElementById(cfg.muteId).textContent = v.muted ? 'Unmute' : 'Mute';
+}
+
+function onScrub(key, val) {
+  const v = getVideo(key);
+  if (isFinite(v.duration)) v.currentTime = (val / 1000) * v.duration;
+}
+
+function initPlayer(streamUrl, key) {
+  const cfg = PLAYERS[key];
+  const v = document.getElementById(cfg.videoId);
+  document.getElementById(cfg.srcId).src = streamUrl;
+  v.load();
+  document.getElementById(cfg.wrapId).classList.add('is-visible');
+
+  if (!playerInited[key]) {
+    playerInited[key] = true;
+    v.addEventListener('timeupdate', () => {
+      const scrubbing = key === 'change' ? changeScrubbing : isScrubbing;
+      if (scrubbing || !isFinite(v.duration)) return;
+      const pct = (v.currentTime / v.duration) * 1000;
+      document.getElementById(cfg.scrubId).value = pct;
+      document.getElementById(cfg.timeId).textContent =
+        `${fmtTime(v.currentTime)} / ${fmtTime(v.duration)}`;
+    });
+    v.addEventListener('ended', () => setPlayButtonLabel(key, false));
+    v.addEventListener('click', () => togglePlay(key));
+    v.addEventListener('loadedmetadata', () => {
+      if (key === 'change') syncChangeRoiCanvas();
+    });
+    v.addEventListener('keydown', (e) => {
+      if (e.key === ' ') { e.preventDefault(); togglePlay(key); }
+      else if (e.key === 'ArrowLeft') v.currentTime = Math.max(0, v.currentTime - 5);
+      else if (e.key === 'ArrowRight') v.currentTime = Math.min(v.duration, v.currentTime + 5);
+    });
+  }
+
+  if (!window._videoResizeHooked) {
+    window._videoResizeHooked = true;
+    window.addEventListener('resize', () => {
+      clearTimeout(window._resizeSyncT);
+      window._resizeSyncT = setTimeout(syncChangeRoiCanvas, 120);
+    });
+  }
+}
+
+async function showResult(result) {
+  currentResult = result;
+  resetChangeAnalysisState();
+  updateChangeWorkspaceUi();
+
+  const isVideo = result.file.endsWith('.mp4');
+  const streamUrl = '/aligner-api/stream?path=' + encodeURIComponent(result.file);
+
+  document.getElementById('alignerPlaceholder').classList.add('hidden');
+  document.getElementById('roiCanvas').style.display = 'none';
+  document.getElementById('resultWrap').classList.add('is-visible');
+
+  if (isVideo) {
+    document.getElementById('previewGif').classList.add('hidden');
+    document.getElementById('videoWrap').classList.add('is-visible');
+    initPlayer(streamUrl, 'aligner');
+    document.getElementById('momentsPanel').classList.add('is-visible');
+    loadMoments();
+    initPlayer(streamUrl, 'change');
+  } else {
+    document.getElementById('videoWrap').classList.remove('is-visible');
+    document.getElementById('previewGif').classList.remove('hidden');
+    document.getElementById('momentsPanel').classList.remove('is-visible');
+    const r = await fetch('/aligner-api/preview_result?path=' + encodeURIComponent(result.preview));
+    const d = await r.json();
+    document.getElementById('previewGif').src = 'data:image/gif;base64,' + d.b64;
+  }
+
+  document.getElementById('dlLink').href = '/aligner-api/download?path=' + encodeURIComponent(result.file);
+  document.getElementById('dlLink').download = result.file.split('/').pop();
+  document.getElementById('alignerPreviewTitle').textContent = `Done - ${result.count} frames`;
+  setWorkspace('aligner');
+  postTimelapseResultToParent(result);
+}
+
+function postTimelapseResultToParent(result) {
+  if (!result?.file || window.parent === window) return;
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('embed') !== '1') return;
+  window.parent.postMessage({
+    type: 'yukon-timelapse-result',
+    river_id: params.get('river_id') || '',
+    section_id: params.get('section_id') || '',
+    result: {
+      file: result.file,
+      preview: result.preview || '',
+      count: result.count || 0,
+      fps: result.fps || 4,
+    },
+  }, window.location.origin);
+}
+
+function labelAtTime(t) {
+  if (!currentResult || !currentResult.labels || !currentResult.fps) return '';
+  const idx = Math.min(
+    currentResult.labels.length - 1,
+    Math.max(0, Math.round(t * currentResult.fps)),
+  );
+  const raw = currentResult.labels[idx] || '';
+  return raw.replace('|', '  ');
+}
+
+function captureThumb() {
+  const v = getVideo('aligner');
+  if (!v.videoWidth) return '';
+  const W = 320;
+  const H = Math.round((v.videoHeight / v.videoWidth) * W);
+  const c = document.createElement('canvas');
+  c.width = W;
+  c.height = H;
+  try {
+    c.getContext('2d').drawImage(v, 0, 0, W, H);
+    return c.toDataURL('image/jpeg', 0.72).split(',')[1];
+  } catch (e) {
+    console.warn('thumb capture failed', e);
+    return '';
+  }
+}
+
+async function saveMoment() {
+  if (!currentResult || !currentResult.file.endsWith('.mp4')) return;
+  const v = getVideo('aligner');
+  if (!v.paused) { v.pause(); setPlayButtonLabel('aligner', false); }
+
+  const t = v.currentTime || 0;
+  const label = labelAtTime(t);
+  const thumb = captureThumb();
+  const note = (prompt(`Save moment at ${label || fmtTime(t)}\n\nAdd a note (optional):`, '') ?? '').trim();
+
+  const btn = document.getElementById('saveMomentBtn');
+  btn.disabled = true;
+  btn.textContent = 'Saving...';
+
+  try {
+    const r = await fetch('/aligner-api/moments/add', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ video: currentResult.file, time: t, label, note, thumb }),
+    });
+    const d = await r.json();
+    if (d.ok) {
+      await loadMoments();
+      btn.classList.add('save-flash');
+      setTimeout(() => btn.classList.remove('save-flash'), 600);
+    } else {
+      alert('Failed to save moment: ' + (d.error || 'unknown'));
+    }
+  } catch (e) {
+    alert('Failed to save moment: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Save moment';
+  }
+}
+
+async function loadMoments() {
+  if (!currentResult) return;
+  const r = await fetch('/aligner-api/moments/list?video=' + encodeURIComponent(currentResult.file));
+  const d = await r.json();
+  renderMoments(d.moments || []);
+}
+
+function renderMoments(moments) {
+  const grid = document.getElementById('momentsGrid');
+  const empty = document.getElementById('momentsEmpty');
+  document.getElementById('momentCount').textContent = moments.length ? `${moments.length} saved` : '0';
+
+  if (!moments.length) {
+    grid.innerHTML = '';
+    empty.style.display = 'block';
+    return;
+  }
+  empty.style.display = 'none';
+
+  grid.innerHTML = moments.map((m) => {
+    const thumbSrc = m.thumb ? `data:image/jpeg;base64,${m.thumb}` : '';
+    const labelHtml = escapeHtml(m.label || fmtTime(m.time));
+    const noteHtml = m.note ? `<div class="moment-note">${escapeHtml(m.note)}</div>` : '';
+    return `
+      <div class="moment-card" onclick="seekToMoment(${m.time})" title="Click to seek">
+        <button type="button" class="moment-del" title="Delete moment"
+                onclick="event.stopPropagation();deleteMoment('${m.id}')">Del</button>
+        ${thumbSrc ? `<img class="moment-thumb" src="${thumbSrc}" alt="">` : ''}
+        <div class="moment-info">
+          <div class="moment-label">${labelHtml}</div>
+          <div class="moment-time">${fmtTime(m.time)}</div>
+          ${noteHtml}
+        </div>
+      </div>`;
+  }).join('');
+}
+
+function seekToMoment(t) {
+  const v = getVideo('aligner');
+  if (!isFinite(v.duration)) return;
+  v.currentTime = Math.min(Math.max(0, t), v.duration);
+  v.pause();
+  setPlayButtonLabel('aligner', false);
+  setWorkspace('aligner');
+}
+
+async function deleteMoment(id) {
+  if (!currentResult) return;
+  if (!confirm('Delete this moment?')) return;
+  const r = await fetch('/aligner-api/moments/delete', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ video: currentResult.file, id }),
+  });
+  const d = await r.json();
+  if (d.ok) loadMoments();
+}
+
+function syncChangeRoiCanvas() {
+  const wrap = document.getElementById('changeVideoWrap');
+  if (!wrap || !wrap.classList.contains('is-visible')) return;
+  const v = getVideo('change');
+  const c = document.getElementById('changeRoiCanvas');
+  const rect = v.getBoundingClientRect();
+  if (rect.width < 8 || rect.height < 8) return;
+  c.style.display = 'block';
+  c.style.left = '0';
+  c.style.top = '0';
+  c.style.width = rect.width + 'px';
+  c.style.height = rect.height + 'px';
+  c.width = Math.floor(rect.width);
+  c.height = Math.floor(rect.height);
+  drawChangeRoiOverlay();
+}
+
+function drawChangeRoiOverlay() {
+  const c = document.getElementById('changeRoiCanvas');
+  if (!c) return;
+  const ctx = c.getContext('2d');
+  if (!ctx) return;
+  ctx.clearRect(0, 0, c.width, c.height);
+  const drawOne = (r, dash) => {
+    if (!r || r.w < 0.005 || r.h < 0.005) return;
+    const x = r.x * c.width;
+    const y = r.y * c.height;
+    const w = r.w * c.width;
+    const h = r.h * c.height;
+    ctx.setLineDash(dash || []);
+    ctx.strokeStyle = '#a7deff';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x, y, w, h);
+    ctx.fillStyle = 'rgba(167, 222, 255, 0.12)';
+    ctx.fillRect(x, y, w, h);
+    ctx.fillStyle = '#a7deff';
+    ctx.font = 'bold 11px IBM Plex Mono, monospace';
+    ctx.fillText('Change ROI', x + 4, y + 14);
+    ctx.setLineDash([]);
+  };
+  drawOne(changeRoi);
+  if (changeDrawing && changeTempRoi) drawOne(changeTempRoi, [5, 4]);
+}
+
+function getChangeCanvasPos(e) {
+  const c = document.getElementById('changeRoiCanvas');
+  const rect = c.getBoundingClientRect();
+  const sx = c.width / rect.width;
+  const sy = c.height / rect.height;
+  return { x: (e.clientX - rect.left) * sx, y: (e.clientY - rect.top) * sy };
+}
+
+function changeRoiStart(e) {
+  if (!changeDrawMode) return;
+  e.preventDefault();
+  changeDrawing = true;
+  const p = getChangeCanvasPos(e);
+  changeStartX = p.x;
+  changeStartY = p.y;
+}
+
+function changeRoiMove(e) {
+  if (!changeDrawing || !changeDrawMode) return;
+  const p = getChangeCanvasPos(e);
+  const canvas = document.getElementById('changeRoiCanvas');
+  changeTempRoi = {
+    x: Math.min(changeStartX, p.x) / canvas.width,
+    y: Math.min(changeStartY, p.y) / canvas.height,
+    w: Math.abs(p.x - changeStartX) / canvas.width,
+    h: Math.abs(p.y - changeStartY) / canvas.height,
+  };
+  drawChangeRoiOverlay();
+}
+
+function changeRoiEnd(e) {
+  if (!changeDrawing) return;
+  changeDrawing = false;
+  if (changeTempRoi && changeTempRoi.w > 0.02 && changeTempRoi.h > 0.02) {
+    changeRoi = { ...changeTempRoi };
+  }
+  changeTempRoi = null;
+  drawChangeRoiOverlay();
+}
+
+function toggleChangeDrawMode() {
+  changeDrawMode = !changeDrawMode;
+  const c = document.getElementById('changeRoiCanvas');
+  c.classList.toggle('active', changeDrawMode);
+  document.getElementById('changeDrawToggle').textContent =
+    changeDrawMode ? 'Done drawing' : 'Draw region';
+  if (!changeDrawMode) {
+    changeDrawing = false;
+    changeTempRoi = null;
+    drawChangeRoiOverlay();
+  }
+}
+
+function clearChangeRoi() {
+  changeRoi = null;
+  changeTempRoi = null;
+  drawChangeRoiOverlay();
+}
+
+async function runChangeDetection() {
+  if (!currentResult || !currentResult.file.endsWith('.mp4')) {
+    alert('Generate an MP4 timelapse in Timelapse Aligner first.');
+    setWorkspace('aligner');
+    return;
+  }
+  if (!changeRoi || changeRoi.w < 0.02 || changeRoi.h < 0.02) {
+    alert('Draw a region on the video first: click Draw region, then drag a box over the area to monitor.');
+    return;
+  }
+  const btn = document.getElementById('runChangeBtn');
+  btn.disabled = true;
+  const prog = document.getElementById('changeProgWrap');
+  prog.hidden = false;
+  document.getElementById('changeProgFill').style.width = '0%';
+  document.getElementById('changeProgMsg').textContent = 'Submitting...';
+
+  const res = await fetch('/aligner-api/change_detect', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      video: currentResult.file,
+      roi: changeRoi,
+      sensitivity: parseFloat(document.getElementById('changeSensitivity').value) || 2,
+      min_segment_sec: parseFloat(document.getElementById('changeMinSeg').value) || 2,
+      pad_sec: parseFloat(document.getElementById('changePad').value) || 1.5,
+      labels: currentResult.labels || [],
+    }),
+  });
+  const sub = await res.json();
+  if (sub.error) {
+    alert(sub.error);
+    btn.disabled = false;
+    prog.hidden = true;
+    return;
+  }
+  if (changePollTimer) clearInterval(changePollTimer);
+  changePollTimer = setInterval(pollChangeStatus, 450);
+}
+
+async function pollChangeStatus() {
+  const r = await fetch('/aligner-api/change_status');
+  const d = await r.json();
+  const pct = d.total > 0 ? Math.round(d.progress / d.total * 100) : 0;
+  document.getElementById('changeProgFill').style.width = pct + '%';
+  document.getElementById('changeProgMsg').textContent = d.message || '';
+  if (d.status === 'done') {
+    clearInterval(changePollTimer);
+    changePollTimer = null;
+    document.getElementById('runChangeBtn').disabled = false;
+    document.getElementById('changeProgWrap').hidden = true;
+    renderChangeResults(d.result || {});
+  } else if (d.status === 'error') {
+    clearInterval(changePollTimer);
+    changePollTimer = null;
+    document.getElementById('runChangeBtn').disabled = false;
+    document.getElementById('changeProgWrap').hidden = true;
+    alert('Change detection failed: ' + (d.message || 'unknown'));
+  }
+}
+
+function renderSparkline(curve) {
+  const wrap = document.getElementById('changeSparkWrap');
+  const svg = document.getElementById('changeSpark');
+  if (!curve || curve.length < 2) {
+    wrap.classList.remove('is-visible');
+    return;
+  }
+  wrap.classList.add('is-visible');
+  const vs = curve.map((p) => p.v);
+  const ts = curve.map((p) => p.t);
+  const vmin = Math.min(...vs);
+  const vmax = Math.max(...vs);
+  const span = Math.max(vmax - vmin, 1e-9);
+  const tmin = ts[0];
+  const tmax = ts[ts.length - 1];
+  const tspan = Math.max(tmax - tmin, 1e-9);
+  const pts = curve.map((p) => {
+    const px = ((p.t - tmin) / tspan) * 400;
+    const py = 52 - ((p.v - vmin) / span) * 48;
+    return `${px.toFixed(1)},${py.toFixed(1)}`;
+  }).join(' ');
+  svg.innerHTML = `<polyline fill="none" stroke="#a7deff" stroke-width="1.4" points="${pts}"/>`;
+}
+
+function renderChangeResults(result) {
+  renderSparkline(result.scores_curve);
+  const el = document.getElementById('changeSegments');
+  const segs = result.segments || [];
+  if (!segs.length) {
+    el.innerHTML = '<p class="change-help" style="margin:0">No strong change intervals detected. Try a tighter ROI, a lower min segment length, or higher sensitivity.</p>';
+    return;
+  }
+  el.innerHTML = segs.map((s, i) => `
+    <div class="seg-card">
+      <div>
+        <div class="seg-title">Change #${i + 1}${s.label_at_peak ? ' - ' + escapeHtml(s.label_at_peak) : ''}</div>
+        <div class="seg-meta">${fmtTime(s.start)} to ${fmtTime(s.end)} - peak ${fmtTime(s.peak)} - score ${s.peak_score}</div>
+      </div>
+      <div class="seg-actions">
+        <button type="button" class="btn-secondary inline-btn" onclick="playSegment(${s.start}, ${s.end})">Play clip</button>
+        <button type="button" class="btn-secondary inline-btn" onclick="seekChangeVideo(${s.peak})">Jump to peak</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+function playSegment(start, end) {
+  setWorkspace('change');
+  const v = getVideo('change');
+  if (!isFinite(v.duration)) return;
+  if (clipTimeUpdateHandler) {
+    v.removeEventListener('timeupdate', clipTimeUpdateHandler);
+    clipTimeUpdateHandler = null;
+  }
+  const t1 = Math.max(0, start);
+  const t2 = Math.min(v.duration, end);
+  clipTimeUpdateHandler = function () {
+    if (v.currentTime >= t2 - 0.04) {
+      v.pause();
+      v.removeEventListener('timeupdate', clipTimeUpdateHandler);
+      clipTimeUpdateHandler = null;
+      setPlayButtonLabel('change', false);
+    }
+  };
+  v.addEventListener('timeupdate', clipTimeUpdateHandler);
+  v.currentTime = t1;
+  v.play();
+  setPlayButtonLabel('change', true);
+}
+
+function seekChangeVideo(t) {
+  setWorkspace('change');
+  const v = getVideo('change');
+  if (!isFinite(v.duration)) return;
+  v.currentTime = Math.min(Math.max(0, t), v.duration);
+  v.pause();
+  setPlayButtonLabel('change', false);
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[c]));
+}
+
+function applyEmbedBoot() {
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('embed') !== '1') return;
+
+  document.body.classList.add('is-embed');
+
+  const sectionLabel = params.get('section');
+  if (sectionLabel) {
+    const sub = document.querySelector('.top-header-sub');
+    if (sub) sub.textContent = sectionLabel;
+  }
+
+  const folder = params.get('folder');
+  if (!folder) return;
+
+  const folderInput = document.getElementById('folderPath');
+  if (folderInput) {
+    folderInput.value = folder;
+    folderInput.readOnly = true;
+  }
+
+  if (params.get('autopreview') === '1') {
+    setTimeout(() => previewFolder(), 0);
+  }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  document.querySelectorAll('.workspace-tab').forEach((tab) => {
+    tab.addEventListener('click', () => setWorkspace(tab.dataset.workspace));
+  });
+
+  const c = document.getElementById('changeRoiCanvas');
+  if (c) {
+    c.addEventListener('mousedown', changeRoiStart);
+    c.addEventListener('mousemove', changeRoiMove);
+    c.addEventListener('mouseup', changeRoiEnd);
+    c.addEventListener('mouseleave', (ev) => { if (changeDrawing) changeRoiEnd(ev); });
+  }
+
+  updateChangeWorkspaceUi();
+  applyEmbedBoot();
+});
+
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 's' && e.key !== 'S') return;
+  const t = e.target && e.target.tagName;
+  if (t === 'INPUT' || t === 'TEXTAREA' || t === 'SELECT') return;
+  if (activeWorkspace !== 'aligner') return;
+  if (!document.getElementById('videoWrap').classList.contains('is-visible')) return;
+  e.preventDefault();
+  saveMoment();
+});
+</script>
+</body>
+</html>
