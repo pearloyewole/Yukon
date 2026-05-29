@@ -22,6 +22,9 @@ export function mountCrossSectionInteractivePlot(container, section, options = {
 
   const velocityGrid = section?.mat_summary?.velocity?.sample;
   const maskGrid = section?.mat_summary?.mask?.sample;
+  const controlsHost = options?.controlsHost instanceof Element
+    ? options.controlsHost
+    : null;
   const onLayoutExpandChange = typeof options?.onLayoutExpandChange === 'function'
     ? options.onLayoutExpandChange
     : null;
@@ -68,6 +71,26 @@ export function mountCrossSectionInteractivePlot(container, section, options = {
     layoutExpanded: false,
   };
 
+  const measureControlsMarkup = `
+    <div class="measure-toolbar measure-toolbar-header">
+      <button type="button" class="measure-layout-toggle" data-layout-toggle>Expand side panel</button>
+      <button type="button" data-measure-toggle>Start measurement mode</button>
+      <button type="button" data-measure-clear>Clear all</button>
+      <button type="button" data-measure-export>Export to Excel</button>
+      <button type="button" data-measure-prev>Prev transect</button>
+      <button type="button" data-measure-next>Next transect</button>
+      <label class="plot-control plot-control-check">
+        <input data-measure-show-selected-only type="checkbox" />
+        Show only selected transect
+      </label>
+    </div>
+    <div class="plot-readout plot-readout-measure-top" data-measure-readout>No measurements yet</div>
+  `;
+
+  if (controlsHost) {
+    controlsHost.innerHTML = measureControlsMarkup;
+  }
+
   container.innerHTML = `
     <div class="cross-section-interactive">
       <div class="cross-section-interactive-grid">
@@ -93,25 +116,9 @@ export function mountCrossSectionInteractivePlot(container, section, options = {
         </section>
 
         <section class="plot-panel plot-panel-measurements">
-          <div class="plot-head">
+          <div class="plot-head plot-head-measure">
             <h4 class="plot-title">Velocity vs Height Above Bed</h4>
-            <div class="plot-head-actions plot-head-actions-measure">
-              <button type="button" class="measure-layout-toggle" data-layout-toggle>Expand side panel</button>
-              <div class="plot-readout" data-measure-readout>No measurements yet</div>
-            </div>
-          </div>
-          <div class="measure-toolbar measure-toolbar-primary">
-            <button type="button" data-measure-toggle>Start measurement mode</button>
-            <button type="button" data-measure-clear>Clear all</button>
-            <button type="button" data-measure-export>Export to Excel</button>
-          </div>
-          <div class="measure-toolbar measure-toolbar-secondary">
-            <button type="button" data-measure-prev>Prev transect</button>
-            <button type="button" data-measure-next>Next transect</button>
-            <label class="plot-control plot-control-check">
-              <input data-measure-show-selected-only type="checkbox" />
-              Show only selected transect
-            </label>
+            ${controlsHost ? '' : `<div class="plot-head-actions plot-head-actions-measure">${measureControlsMarkup}</div>`}
           </div>
           <div data-measure-list class="measure-list"></div>
           <div data-measure-profile-host class="cross-p5-host cross-p5-host-measure"></div>
@@ -120,17 +127,25 @@ export function mountCrossSectionInteractivePlot(container, section, options = {
     </div>
   `;
 
+  const queryControl = (selector) => {
+    if (controlsHost) {
+      const hit = controlsHost.querySelector(selector);
+      if (hit) return hit;
+    }
+    return container.querySelector(selector);
+  };
+
   const refs = {
     heatReadout: container.querySelector('[data-heat-readout]'),
-    measureReadout: container.querySelector('[data-measure-readout]'),
+    measureReadout: queryControl('[data-measure-readout]'),
     heatHost: container.querySelector('[data-heat-host]'),
-    measureToggleBtn: container.querySelector('[data-measure-toggle]'),
-    measureClearBtn: container.querySelector('[data-measure-clear]'),
-    measureExportBtn: container.querySelector('[data-measure-export]'),
-    measurePrevBtn: container.querySelector('[data-measure-prev]'),
-    measureNextBtn: container.querySelector('[data-measure-next]'),
-    measureShowSelectedOnly: container.querySelector('[data-measure-show-selected-only]'),
-    layoutToggleBtn: container.querySelector('[data-layout-toggle]'),
+    measureToggleBtn: queryControl('[data-measure-toggle]'),
+    measureClearBtn: queryControl('[data-measure-clear]'),
+    measureExportBtn: queryControl('[data-measure-export]'),
+    measurePrevBtn: queryControl('[data-measure-prev]'),
+    measureNextBtn: queryControl('[data-measure-next]'),
+    measureShowSelectedOnly: queryControl('[data-measure-show-selected-only]'),
+    layoutToggleBtn: queryControl('[data-layout-toggle]'),
     fieldSelect: container.querySelector('[data-field-select]'),
     arrowToggle: container.querySelector('[data-arrow-toggle]'),
     measureList: container.querySelector('[data-measure-list]'),
@@ -195,12 +210,16 @@ export function mountCrossSectionInteractivePlot(container, section, options = {
       ? `showing ${selected.label} only`
       : 'showing all transects';
 
-    refs.measureReadout.textContent = state.measurements.length > 0
-      ? `${state.measurements.length} line(s) collected • ${visibilityLabel}`
-      : 'No measurements yet';
+    if (refs.measureReadout) {
+      refs.measureReadout.textContent = state.measurements.length > 0
+        ? `${state.measurements.length} line(s) collected • ${visibilityLabel}`
+        : 'No measurements yet';
+    }
 
-    refs.layoutToggleBtn.textContent = state.layoutExpanded ? 'Collapse side panel' : 'Expand side panel';
-    refs.layoutToggleBtn.classList.toggle('is-active', state.layoutExpanded);
+    if (refs.layoutToggleBtn) {
+      refs.layoutToggleBtn.textContent = state.layoutExpanded ? 'Collapse side panel' : 'Expand side panel';
+      refs.layoutToggleBtn.classList.toggle('is-active', state.layoutExpanded);
+    }
   };
 
   const setActiveField = (fieldKey) => {
@@ -298,8 +317,10 @@ export function mountCrossSectionInteractivePlot(container, section, options = {
     if (!refs.measureList) return;
     syncSelectedMeasurement();
 
-    refs.measureToggleBtn.textContent = state.measurementMode ? 'Stop measurement mode' : 'Start measurement mode';
-    refs.measureToggleBtn.classList.toggle('is-active', state.measurementMode);
+    if (refs.measureToggleBtn) {
+      refs.measureToggleBtn.textContent = state.measurementMode ? 'Stop measurement mode' : 'Start measurement mode';
+      refs.measureToggleBtn.classList.toggle('is-active', state.measurementMode);
+    }
     if (refs.measureShowSelectedOnly) refs.measureShowSelectedOnly.checked = state.showSelectedOnly;
     if (refs.measurePrevBtn) refs.measurePrevBtn.disabled = state.measurements.length < 2;
     if (refs.measureNextBtn) refs.measureNextBtn.disabled = state.measurements.length < 2;
@@ -349,6 +370,7 @@ export function mountCrossSectionInteractivePlot(container, section, options = {
   activePanel = {
     state,
     refs,
+    controlsHost,
     instances: {
       heat: heatPlot,
       measure: measurePlot,
@@ -382,6 +404,9 @@ export function destroyCrossSectionInteractivePlot() {
 
   if (activePanel.state?.layoutExpanded) {
     activePanel.onLayoutExpandChange?.(false);
+  }
+  if (activePanel.controlsHost) {
+    activePanel.controlsHost.innerHTML = '';
   }
   activePanel.resizeObserver?.disconnect();
   activePanel.instances.heat?.remove();
