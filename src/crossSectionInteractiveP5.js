@@ -632,7 +632,7 @@ function createMeasurementProfilePlot(host, state) {
     p.draw = () => {
       metrics.w = p.width - metrics.x - 20;
       metrics.h = p.height - metrics.y - 32;
-      p.background(7, 10, 14);
+      p.background(3, 19, 36);
       drawGrid(p, metrics, 6, 5);
 
       const selected = state.measurements.find((m) => m.id === state.selectedMeasurementId) || state.measurements[0];

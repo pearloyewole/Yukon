@@ -58,8 +58,10 @@ const TIMELAPSE_VIDEO_ASSETS = [
 ];
 const DEMO_RIVER_VIDEO_ICON_COUNT = 14;
 const BANK_ARROW_SCALE_MIN = 1;
-const BANK_ARROW_SCALE_MAX = 2.45;
+const BANK_ARROW_SCALE_MAX = 28;
 const BANK_ARROW_REF_MIN_DISTANCE = 420;
+const BANK_ARROW_ZOOM_OUT_GAIN = 12;
+const BANK_ARROW_ZOOM_POWER = 1.15;
 const BANK_ARROW_UPDATE_EPSILON = 0.03;
 
 function getPreloadedRiverById(riverId) {
@@ -120,6 +122,8 @@ const els = {
   viewerToolbar: document.getElementById('viewerToolbar'),
   toolSheetBtn: document.getElementById('toolSheetBtn'),
   toolMeasureBtn: document.getElementById('toolMeasureBtn'),
+  toolVideoBtn: document.getElementById('toolVideoBtn'),
+  toolVideoFileInput: document.getElementById('toolVideoFileInput'),
   sheetCountBadge: document.getElementById('sheetCountBadge'),
   sheetPanel: document.getElementById('sheetPanel'),
   sheetTableWrap: document.getElementById('sheetTableWrap'),
@@ -152,7 +156,7 @@ let groundBasePlane = null;
 let clickableMarkers = [];
 let timelapseFlagPickTargets = [];
 let timelapseFlagLayer = null;
-let showTimelapseFlags = false;
+let showTimelapseFlags = true;
 let riverVideoPickTargets = [];
 let sedimentSamplePickTargets = [];
 let curtainMeshes = [];
@@ -178,6 +182,10 @@ let measurementPointerId = null;
 let measurementStart = null;
 let measurementEnd = null;
 let measurementLine = null;
+let videoPlacementModeEnabled = false;
+let pendingVideoPlacementPoint = null;
+let customVideoMarkerSeq = 0;
+let customVideoObjectUrls = [];
 let currentPackageData = null;
 let timelapseBeaconHeight = 3200;
 let currentPreloadedRiverId = DEFAULT_PRELOADED_RIVER_ID;
@@ -311,13 +319,7 @@ function setupUiEvents() {
     setStatus(`Sediment samples ${label}.`);
   });
 
-  showTimelapseFlags = Boolean(els.toggleTimelapseFlags?.checked ?? false);
-  els.toggleTimelapseFlags?.addEventListener('change', () => {
-    showTimelapseFlags = Boolean(els.toggleTimelapseFlags.checked);
-    setTimelapseFlagVisibility(showTimelapseFlags);
-    const label = showTimelapseFlags ? 'shown' : 'hidden';
-    setStatus(`Timelapse cross-section markers ${label}.`);
-  });
+  showTimelapseFlags = true;
 
   els.toolSheetBtn?.addEventListener('click', () => {
     setSheetPanelVisible(els.sheetPanel?.classList.contains('is-hidden'));
@@ -347,6 +349,12 @@ function setupUiEvents() {
   els.toolMeasureBtn?.addEventListener('click', () => {
     setMeasurementMode(!measurementModeEnabled);
   });
+
+  els.toolVideoBtn?.addEventListener('click', () => {
+    setVideoPlacementMode(!videoPlacementModeEnabled);
+  });
+
+  els.toolVideoFileInput?.addEventListener('change', onVideoFilePickedForPlacement);
 
   renderPreloadedRiverSpots();
   renderSheetTable();
@@ -2228,6 +2236,9 @@ async function loadPackage(data) {
   }
 
   await initCrossSectionTimelapse();
+  releaseCustomVideoObjectUrls();
+  setVideoPlacementMode(false, { silent: true });
+  pendingVideoPlacementPoint = null;
 
   if (currentRiverGroup) {
     clearMapMeasurementSegments();
@@ -2249,6 +2260,7 @@ async function loadPackage(data) {
   measurementRows = [];
   measurementRowSeq = 0;
   mapMeasurementSegments = [];
+  customVideoMarkerSeq = 0;
   crossSectionNotesByKey = new Map();
   setMeasurementMode(false);
   renderSheetTable();
@@ -2315,18 +2327,11 @@ async function loadPackage(data) {
 
   const crossSectionGroup = buildCrossSections(data.cross_sections || []);
   currentRiverGroup.add(crossSectionGroup);
+
   timelapseFlagLayer = buildTimelapseFlags(data.cross_sections || [], data.river_id);
   if (timelapseFlagLayer) {
     currentRiverGroup.add(timelapseFlagLayer);
     setTimelapseFlagVisibility(showTimelapseFlags);
-  }
-  if (els.toggleTimelapseFlags) {
-    const timelapseSiteCount = timelapseFlagPickTargets.filter(
-      (obj) => obj.userData?.objectType === 'timelapse-flag' && obj.isSprite,
-    ).length;
-    const beaconCount = timelapseSiteCount || Math.ceil(timelapseFlagPickTargets.length / 2);
-    els.toggleTimelapseFlags.disabled = beaconCount === 0;
-    els.toggleTimelapseFlags.checked = beaconCount > 0 && showTimelapseFlags;
   }
 
   scene.add(currentRiverGroup);
@@ -2355,7 +2360,7 @@ async function loadPackage(data) {
   const elevationLabel = elevationCellCount > 0 ? `, ${elevationCellCount.toLocaleString()} elevation cells` : '';
   els.counts.textContent = `${bankPoints.length.toLocaleString()} bank points, ${mappedCount}/${sectionCount} mapped cross-sections${videoLabel}${timelapseLabel}${sonarLabel}${sedimentLabel}${elevationLabel}`;
   if (timelapseSiteCount > 0) {
-    setStatus('Enable “Show timelapse cross-section markers” in the HUD to see purple beacons at sections with image data.');
+    setStatus('Purple beacons indicate cross-sections with timelapse data.');
   }
   els.details.innerHTML = '<p>Click a cross-section marker to view a MATLAB-style cross-section plot and metadata.</p>';
   setCurtainVisibility(showColoredCrossSections);
@@ -2610,7 +2615,9 @@ function updateBankMigrationArrowScale() {
     bankMigrationArrowLayer.userData.zoomReferenceDistance = referenceDistance;
   }
 
-  const rawScale = Math.pow(cameraDistance / referenceDistance, 0.45);
+  const distanceRatio = cameraDistance / referenceDistance;
+  const zoomOutRatio = Math.max(0, distanceRatio - 1);
+  const rawScale = 1 + Math.pow(zoomOutRatio * BANK_ARROW_ZOOM_OUT_GAIN, BANK_ARROW_ZOOM_POWER);
   const nextScale = clamp(rawScale, BANK_ARROW_SCALE_MIN, BANK_ARROW_SCALE_MAX);
   const prevScale = Number(bankMigrationArrowLayer.userData.zoomScale) || 1;
   if (Math.abs(nextScale - prevScale) < BANK_ARROW_UPDATE_EPSILON) return;
@@ -3725,7 +3732,7 @@ function buildTimelapseFlags(sections, riverId) {
   });
   const flagScale = clamp(beaconH * 0.028, 72, 220);
 
-  sections.forEach((section) => {
+  sections.forEach((section, sectionIndex) => {
     if (!section.line?.has_geometry) return;
     const mapping = findTimelapseMapping(riverId, section);
     if (!mapping) return;
@@ -3739,6 +3746,31 @@ function buildTimelapseFlags(sections, riverId) {
 
     const cx = (sx + ex) / 2;
     const cz = (sz + ez) / 2;
+    const sectionWidth = Math.hypot(ex - sx, ez - sz);
+    const placeOnStartBank = sectionIndex % 2 === 0;
+    const bankX = placeOnStartBank ? sx : ex;
+    const bankZ = placeOnStartBank ? sz : ez;
+    const bankDirX = bankX - cx;
+    const bankDirZ = bankZ - cz;
+    const bankDirLen = Math.hypot(bankDirX, bankDirZ) || 1;
+    const sideOffset = clamp(sectionWidth * 0.16, 10, 42);
+    const anchorX = bankX + (bankDirX / bankDirLen) * sideOffset;
+    const anchorZ = bankZ + (bankDirZ / bankDirLen) * sideOffset;
+
+    const fallbackVideo = TIMELAPSE_VIDEO_ASSETS.length > 0
+      ? TIMELAPSE_VIDEO_ASSETS[sectionIndex % TIMELAPSE_VIDEO_ASSETS.length]
+      : null;
+    const sectionLabel = String(section?.transect || section?.mat_file || `XS-${section?.id || sectionIndex + 1}`).trim();
+    const timelapseSource = fallbackVideo
+      ? {
+        title: `Timelapse ${sectionLabel}`,
+        url: fallbackVideo.url,
+      }
+      : {
+        title: `Timelapse ${sectionLabel}`,
+        url: '',
+      };
+
     const anchorY = bedY + 6;
     const poleBottomY = anchorY + clamp(beaconH * 0.02, 24, 80);
     const poleTopY = anchorY + beaconH;
@@ -3749,7 +3781,7 @@ function buildTimelapseFlags(sections, riverId) {
       baseRingMaterial,
     );
     baseRing.rotation.x = -Math.PI / 2;
-    baseRing.position.set(cx, anchorY + 0.5, cz);
+    baseRing.position.set(anchorX, anchorY + 0.5, anchorZ);
     baseRing.renderOrder = 10;
     group.add(baseRing);
 
@@ -3758,7 +3790,7 @@ function buildTimelapseFlags(sections, riverId) {
       new THREE.ConeGeometry(clamp(beaconH * 0.007, 16, 42), downArrowH, 12),
       arrowMaterial,
     );
-    downArrow.position.set(cx, anchorY + downArrowH * 0.5, cz);
+    downArrow.position.set(anchorX, anchorY + downArrowH * 0.5, anchorZ);
     downArrow.rotation.x = Math.PI;
     group.add(downArrow);
 
@@ -3766,7 +3798,7 @@ function buildTimelapseFlags(sections, riverId) {
       new THREE.CylinderGeometry(poleRadius, poleRadius * 0.88, poleHeight, 10),
       poleMaterial,
     );
-    pole.position.set(cx, poleBottomY + poleHeight / 2, cz);
+    pole.position.set(anchorX, poleBottomY + poleHeight / 2, anchorZ);
     group.add(pole);
 
     const topArrowH = clamp(beaconH * 0.04, 70, 180);
@@ -3774,15 +3806,17 @@ function buildTimelapseFlags(sections, riverId) {
       new THREE.ConeGeometry(clamp(beaconH * 0.0055, 12, 32), topArrowH, 12),
       arrowMaterial,
     );
-    topArrow.position.set(cx, poleTopY - topArrowH * 0.5, cz);
+    topArrow.position.set(anchorX, poleTopY - topArrowH * 0.5, anchorZ);
     topArrow.rotation.x = Math.PI;
     group.add(topArrow);
 
     const flag = createTimelapseFlagSprite(flagScale);
-    flag.position.set(cx, poleTopY + flagScale * 0.35, cz);
+    flag.position.set(anchorX, poleTopY + flagScale * 0.35, anchorZ);
     flag.userData = {
       section,
       mapping,
+      source: timelapseSource,
+      cameraIndex: sectionIndex + 1,
       objectType: 'timelapse-flag',
     };
     flag.name = `timelapse-flag-xs-${section.id}`;
@@ -4242,6 +4276,14 @@ function jetColorRgb(t) {
 }
 
 function onPointerDown(event) {
+  if (videoPlacementModeEnabled) {
+    if (pendingVideoPlacementPoint) return;
+    const point = projectPointerToMeasurementSurface(event);
+    if (!point) return;
+    queueVideoPlacementAtPoint(point);
+    return;
+  }
+
   if (measurementModeEnabled) {
     const point = projectPointerToMeasurementSurface(event);
     if (!point) return;
@@ -4292,12 +4334,10 @@ function onPointerDown(event) {
     return;
   }
   if (objectType === 'timelapse-flag') {
-    const section = hit.userData.section;
-    if (!section) return;
-    selectedSection = section;
     highlightMarker(hit);
-    renderCrossSectionDetails(section);
-    openDetailsPanel();
+    if (renderRiverVideoDetails(hit.userData)) {
+      openDetailsPanel();
+    }
     return;
   }
 
@@ -4539,7 +4579,205 @@ function setMeasurementMode(enabled) {
     return;
   }
 
+  if (videoPlacementModeEnabled) {
+    setVideoPlacementMode(false, { silent: true });
+  }
   setStatus('Measurement mode enabled: click and drag on the map to measure distance.');
+}
+
+function setVideoPlacementMode(enabled, options = {}) {
+  const next = Boolean(enabled);
+  if (videoPlacementModeEnabled === next) return;
+
+  const silent = Boolean(options?.silent);
+  videoPlacementModeEnabled = next;
+  if (els.toolVideoBtn) {
+    els.toolVideoBtn.classList.toggle('is-active', videoPlacementModeEnabled);
+  }
+
+  if (!videoPlacementModeEnabled) {
+    pendingVideoPlacementPoint = null;
+    if (els.toolVideoFileInput) {
+      els.toolVideoFileInput.value = '';
+    }
+    if (!silent) {
+      setStatus('Timelapse placement mode disabled.');
+    }
+    return;
+  }
+
+  if (!currentRiverGroup) {
+    videoPlacementModeEnabled = false;
+    if (els.toolVideoBtn) {
+      els.toolVideoBtn.classList.remove('is-active');
+    }
+    if (!silent) {
+      setStatus('Load a river package before placing timelapse markers.');
+    }
+    return;
+  }
+
+  if (measurementModeEnabled) {
+    setMeasurementMode(false);
+  }
+  if (!silent) {
+    setStatus('Timelapse placement mode enabled: click a location, then choose a video file.');
+  }
+}
+
+function queueVideoPlacementAtPoint(point) {
+  if (!point) return;
+
+  pendingVideoPlacementPoint = point.clone();
+  const fileInput = els.toolVideoFileInput;
+  if (!fileInput) {
+    const fallbackSource = TIMELAPSE_VIDEO_ASSETS.length > 0
+      ? TIMELAPSE_VIDEO_ASSETS[customVideoMarkerSeq % TIMELAPSE_VIDEO_ASSETS.length]
+      : null;
+    if (fallbackSource) {
+      createCustomRiverVideoMarkerAtPoint(pendingVideoPlacementPoint, fallbackSource);
+      pendingVideoPlacementPoint = null;
+      setStatus(`Placed timelapse marker ${customVideoMarkerSeq} with default video.`);
+    } else {
+      pendingVideoPlacementPoint = null;
+      setStatus('No video source available for placement.');
+    }
+    return;
+  }
+
+  fileInput.value = '';
+  fileInput.click();
+  setStatus('Select a timelapse video file to place at this location.');
+}
+
+function onVideoFilePickedForPlacement(event) {
+  const input = event?.target;
+  const point = pendingVideoPlacementPoint ? pendingVideoPlacementPoint.clone() : null;
+  pendingVideoPlacementPoint = null;
+
+  const file = input?.files?.[0] || null;
+  if (!point) {
+    if (input) input.value = '';
+    return;
+  }
+
+  if (!file) {
+    if (input) input.value = '';
+    setStatus('No video selected. Click a location again to place a timelapse marker.');
+    return;
+  }
+
+  const objectUrl = URL.createObjectURL(file);
+  customVideoObjectUrls.push(objectUrl);
+  const source = {
+    title: String(file.name || `Timelapse ${customVideoMarkerSeq + 1}`),
+    url: objectUrl,
+  };
+  createCustomRiverVideoMarkerAtPoint(point, source);
+  if (input) input.value = '';
+}
+
+function createCustomRiverVideoMarkerAtPoint(point, source) {
+  if (!currentRiverGroup || !point || !source) return null;
+
+  customVideoMarkerSeq += 1;
+  const markerId = customVideoMarkerSeq;
+  const beaconH = timelapseBeaconHeight;
+  const poleRadius = clamp(beaconH * 0.0018, 4, 14);
+  const flagScale = clamp(beaconH * 0.028, 72, 220);
+  const anchorY = point.y + 6;
+  const poleBottomY = anchorY + clamp(beaconH * 0.02, 24, 80);
+  const poleTopY = anchorY + beaconH;
+  const poleHeight = poleTopY - poleBottomY;
+
+  const poleMaterial = new THREE.MeshStandardMaterial({
+    color: 0xc084fc,
+    emissive: 0x4a1578,
+    roughness: 0.35,
+    metalness: 0.12,
+    transparent: true,
+    opacity: 0.92,
+  });
+  const arrowMaterial = new THREE.MeshStandardMaterial({
+    color: 0xe9b8ff,
+    emissive: 0x6b21a8,
+    roughness: 0.3,
+    metalness: 0.08,
+  });
+  const baseRingMaterial = new THREE.MeshBasicMaterial({
+    color: 0xd8b4fe,
+    transparent: true,
+    opacity: 0.55,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+  });
+
+  const baseRing = new THREE.Mesh(
+    new THREE.RingGeometry(clamp(beaconH * 0.006, 18, 48), clamp(beaconH * 0.009, 28, 64), 32),
+    baseRingMaterial,
+  );
+  baseRing.rotation.x = -Math.PI / 2;
+  baseRing.position.set(point.x, anchorY + 0.5, point.z);
+  baseRing.renderOrder = 10;
+  currentRiverGroup.add(baseRing);
+
+  const downArrowH = clamp(beaconH * 0.055, 90, 260);
+  const downArrow = new THREE.Mesh(
+    new THREE.ConeGeometry(clamp(beaconH * 0.007, 16, 42), downArrowH, 12),
+    arrowMaterial,
+  );
+  downArrow.position.set(point.x, anchorY + downArrowH * 0.5, point.z);
+  downArrow.rotation.x = Math.PI;
+  currentRiverGroup.add(downArrow);
+
+  const pole = new THREE.Mesh(
+    new THREE.CylinderGeometry(poleRadius, poleRadius * 0.88, poleHeight, 10),
+    poleMaterial,
+  );
+  pole.position.set(point.x, poleBottomY + poleHeight / 2, point.z);
+  currentRiverGroup.add(pole);
+
+  const topArrowH = clamp(beaconH * 0.04, 70, 180);
+  const topArrow = new THREE.Mesh(
+    new THREE.ConeGeometry(clamp(beaconH * 0.0055, 12, 32), topArrowH, 12),
+    arrowMaterial,
+  );
+  topArrow.position.set(point.x, poleTopY - topArrowH * 0.5, point.z);
+  topArrow.rotation.x = Math.PI;
+  currentRiverGroup.add(topArrow);
+
+  const videoBadge = createTimelapseFlagSprite(flagScale);
+  videoBadge.position.set(point.x, poleTopY + flagScale * 0.35, point.z);
+  videoBadge.userData = {
+    objectType: 'river-video-site',
+    source,
+    cameraIndex: markerId,
+    isUserPlaced: true,
+  };
+  videoBadge.name = `river-video-user-${markerId}`;
+  riverVideoPickTargets.push(videoBadge);
+  currentRiverGroup.add(videoBadge);
+
+  const totalVideoMarkers = riverVideoPickTargets.length;
+
+  highlightMarker(videoBadge);
+  if (renderRiverVideoDetails(videoBadge.userData)) {
+    openDetailsPanel();
+  }
+  setStatus(`Placed timelapse marker ${markerId}. Total video markers: ${totalVideoMarkers}.`);
+  return videoBadge;
+}
+
+function releaseCustomVideoObjectUrls() {
+  for (const url of customVideoObjectUrls) {
+    if (!url) continue;
+    try {
+      URL.revokeObjectURL(url);
+    } catch {
+      // Ignore URL cleanup failures.
+    }
+  }
+  customVideoObjectUrls = [];
 }
 
 function renderMigrationArrowDetails(hit) {
