@@ -113,6 +113,7 @@ const els = {
   counts: document.getElementById('counts'),
   details: document.getElementById('crossSectionDetails'),
   detailsPanel: document.getElementById('detailsPanel'),
+  sidebarPrimaryActions: document.getElementById('sidebarPrimaryActions'),
   closeSidebar: document.getElementById('closeSidebar'),
   sidebarResizer: document.getElementById('sidebarResizer'),
   openUploadPanel: document.getElementById('openUploadPanel'),
@@ -2382,6 +2383,7 @@ async function loadPackage(data) {
     setStatus('Enable “Show timelapse cross-section markers” to see demo sites along the river.');
   }
   els.details.innerHTML = '<p>Click a cross-section marker to view a MATLAB-style cross-section plot and metadata.</p>';
+  setSidebarPrimaryActions();
   setCurtainVisibility(showColoredCrossSections);
   closeDetailsPanel();
 
@@ -4844,6 +4846,7 @@ function renderMigrationArrowDetails(hit) {
   selectedSection = null;
   highlightMarker(null);
   destroyCrossSectionInteractivePlot();
+  setSidebarPrimaryActions();
 
   const heading = (Math.atan2(arrow.dispY, arrow.dispX) * 180) / Math.PI;
   const heading360 = (heading + 360) % 360;
@@ -4895,6 +4898,7 @@ function renderRiverVideoDetails(videoSiteData) {
   selectedSection = null;
   highlightMarker(null);
   destroyCrossSectionInteractivePlot();
+  setSidebarPrimaryActions();
 
   const videoContent = url
     ? `
@@ -4929,6 +4933,7 @@ function renderSedimentSampleDetails(sampleData) {
 
   selectedSection = null;
   destroyCrossSectionInteractivePlot();
+  setSidebarPrimaryActions();
 
   const grainPlot = buildSedimentGrainSizePlot(sampleData.grainSizeDistribution || []);
   const sampleDate = sampleData.date || 'NA';
@@ -5070,6 +5075,12 @@ async function renderCrossSectionDetails(section) {
   );
 
   destroyCrossSectionInteractivePlot();
+  setSidebarPrimaryActions(`
+    <div class="cross-section-panel-actions">
+      ${addButtonHtml}
+      ${hasPlotData ? '<div id="crossSectionLayoutControls" class="cross-section-layout-controls"></div>' : ''}
+    </div>
+  `);
   els.details.innerHTML = `
     <div class="cross-section-workspace">
       <section class="cs-card cs-notes-card">
@@ -5130,7 +5141,6 @@ async function renderCrossSectionDetails(section) {
         <div class="cs-metrics-grid">
           ${metricsHtml || '<p class="cs-empty">No details available for this section.</p>'}
         </div>
-        ${addButtonHtml}
       </section>
     </div>
   `;
@@ -5138,9 +5148,11 @@ async function renderCrossSectionDetails(section) {
   if (hasPlotData) {
     const interactiveMount = document.getElementById('crossSectionInteractiveMount');
     const titleControlsHost = document.getElementById('crossSectionPlotTitleControls');
+    const layoutControlsHost = document.getElementById('crossSectionLayoutControls');
     if (interactiveMount) {
       mountCrossSectionInteractivePlot(interactiveMount, section, {
         controlsHost: titleControlsHost,
+        layoutControlsHost,
         onLayoutExpandChange: (nextExpanded) => {
           setMeasurementLayoutExpanded(nextExpanded);
         },
@@ -5164,6 +5176,11 @@ async function renderCrossSectionDetails(section) {
       }
     },
   });
+}
+
+function setSidebarPrimaryActions(markup = '') {
+  if (!els.sidebarPrimaryActions) return;
+  els.sidebarPrimaryActions.innerHTML = markup;
 }
 
 function bindCrossSectionNotesInput(section) {
@@ -5666,6 +5683,7 @@ function setMeasurementLayoutExpanded(nextExpanded) {
 function closeDetailsPanel() {
   els.detailsPanel.classList.add('is-hidden');
   els.detailsPanel.setAttribute('aria-hidden', 'true');
+  setSidebarPrimaryActions();
   setMeasurementLayoutExpanded(false);
   selectedSection = null;
   destroyCrossSectionInteractivePlot();

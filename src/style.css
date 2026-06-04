@@ -1103,11 +1103,11 @@ button:hover {
 .sidebar {
   position: absolute;
   right: 0;
-  top: 0;
+  top: 44px;
   z-index: 20;
   width: min(560px, 47vw);
   max-width: calc(100% - 48px);
-  height: 100%;
+  height: calc(100% - 44px);
   padding: 14px 14px 16px 20px;
   border-left: 1px solid rgba(92, 198, 255, 0.28);
   background: linear-gradient(180deg, rgba(4, 15, 30, 0.98), rgba(3, 12, 23, 0.98));
@@ -1151,6 +1151,26 @@ button:hover {
   margin-bottom: 10px;
 }
 
+.sidebar-primary-actions {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.sidebar-primary-actions:empty {
+  display: none;
+}
+
+.sidebar-primary-actions .cross-section-panel-actions {
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.sidebar-primary-actions .cross-section-actions button {
+  padding: 4px 8px;
+  font-size: 0.7rem;
+  border-radius: 6px;
+}
+
 #crossSectionDetails {
   display: grid;
   gap: 12px;
@@ -1159,6 +1179,23 @@ button:hover {
 .cross-section-workspace {
   display: grid;
   gap: 12px;
+}
+
+.cross-section-panel-actions {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 1px 0 2px;
+}
+
+.cross-section-panel-actions .cross-section-actions {
+  margin-top: 0;
+}
+
+.cross-section-layout-controls {
+  display: flex;
+  justify-content: flex-end;
 }
 
 .cs-timelapse-meta {
@@ -1207,9 +1244,24 @@ button:hover {
   margin-top: 4px;
 }
 
-.cs-timelapse-btn-secondary {
-  background: rgba(56, 189, 248, 0.12);
-  border-color: rgba(125, 211, 252, 0.45);
+.cs-timelapse-actions button {
+  border-color: rgba(155, 183, 207, 0.34);
+  background: rgba(12, 29, 48, 0.58);
+  color: #b8d2e8;
+  font-weight: 600;
+}
+
+.cs-timelapse-actions button:hover:not(:disabled) {
+  border-color: rgba(175, 205, 225, 0.45);
+  background: rgba(18, 39, 61, 0.72);
+  color: #d5e8f5;
+}
+
+.cs-timelapse-actions button:disabled {
+  border-color: rgba(130, 151, 170, 0.2);
+  background: rgba(18, 28, 40, 0.42);
+  color: rgba(184, 210, 232, 0.46);
+  cursor: not-allowed;
 }
 
 .cs-timelapse-btn {

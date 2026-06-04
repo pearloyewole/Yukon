@@ -25,6 +25,9 @@ export function mountCrossSectionInteractivePlot(container, section, options = {
   const controlsHost = options?.controlsHost instanceof Element
     ? options.controlsHost
     : null;
+  const layoutControlsHost = options?.layoutControlsHost instanceof Element
+    ? options.layoutControlsHost
+    : null;
   const onLayoutExpandChange = typeof options?.onLayoutExpandChange === 'function'
     ? options.onLayoutExpandChange
     : null;
@@ -71,9 +74,13 @@ export function mountCrossSectionInteractivePlot(container, section, options = {
     layoutExpanded: false,
   };
 
+  const layoutControlMarkup = `
+    <div class="measure-toolbar measure-toolbar-header measure-toolbar-layout">
+      <button type="button" class="measure-layout-toggle" data-layout-toggle>Expand side panel</button>
+    </div>
+  `;
   const measureControlsMarkup = `
     <div class="measure-toolbar measure-toolbar-header">
-      <button type="button" class="measure-layout-toggle" data-layout-toggle>Expand side panel</button>
       <button type="button" data-measure-toggle>Start measurement mode</button>
       <button type="button" data-measure-clear>Clear all</button>
       <button type="button" data-measure-export>Export to Excel</button>
@@ -88,7 +95,11 @@ export function mountCrossSectionInteractivePlot(container, section, options = {
   `;
 
   if (controlsHost) {
-    controlsHost.innerHTML = measureControlsMarkup;
+    controlsHost.innerHTML = layoutControlsHost ? measureControlsMarkup : `${layoutControlMarkup}${measureControlsMarkup}`;
+  }
+
+  if (layoutControlsHost) {
+    layoutControlsHost.innerHTML = layoutControlMarkup;
   }
 
   container.innerHTML = `
@@ -118,7 +129,7 @@ export function mountCrossSectionInteractivePlot(container, section, options = {
         <section class="plot-panel plot-panel-measurements">
           <div class="plot-head plot-head-measure">
             <h4 class="plot-title">Velocity vs Height Above Bed</h4>
-            ${controlsHost ? '' : `<div class="plot-head-actions plot-head-actions-measure">${measureControlsMarkup}</div>`}
+            ${controlsHost ? '' : `<div class="plot-head-actions plot-head-actions-measure">${layoutControlMarkup}${measureControlsMarkup}</div>`}
           </div>
           <div data-measure-list class="measure-list"></div>
           <div data-measure-profile-host class="cross-p5-host cross-p5-host-measure"></div>
@@ -128,6 +139,10 @@ export function mountCrossSectionInteractivePlot(container, section, options = {
   `;
 
   const queryControl = (selector) => {
+    if (layoutControlsHost) {
+      const hit = layoutControlsHost.querySelector(selector);
+      if (hit) return hit;
+    }
     if (controlsHost) {
       const hit = controlsHost.querySelector(selector);
       if (hit) return hit;
