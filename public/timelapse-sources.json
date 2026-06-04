@@ -1,69 +1,72 @@
 {
-  "version": 2,
-  "description": "Cross-section → folder under data/timelapse (7, 8, and 60 image demos only).",
-  "mappings": [
-    {
-      "river_id": "alakanuk",
-      "section_id": 1,
-      "label": "Alakanuk site A (7 frames)",
-      "image_root": "alakanuk_site_a",
-      "date_folders": []
+  "version": 3,
+  "description": "Demo timelapse sites spread along each river. Purple = run aligner; cyan = preloaded video.",
+  "rivers": {
+    "huslia": {
+      "sites": [
+        {
+          "along_river": 0.15,
+          "mode": "aligner",
+          "image_root": "sequence_60",
+          "label": "Field photos (60 frames)"
+        },
+        {
+          "along_river": 0.5,
+          "mode": "video",
+          "video_index": 0,
+          "label": "Preloaded river timelapse A"
+        },
+        {
+          "along_river": 0.85,
+          "mode": "aligner",
+          "image_root": "alakanuk_site_b",
+          "label": "Field photos (8 frames)"
+        }
+      ]
     },
-    {
-      "river_id": "alakanuk",
-      "section_id": 2,
-      "label": "Alakanuk site B (8 frames)",
-      "image_root": "alakanuk_site_b",
-      "date_folders": []
+    "alakanuk": {
+      "sites": [
+        {
+          "along_river": 0.12,
+          "mode": "video",
+          "video_index": 0,
+          "label": "Preloaded river timelapse A"
+        },
+        {
+          "along_river": 0.48,
+          "mode": "aligner",
+          "image_root": "alakanuk_site_a",
+          "label": "Field photos (7 frames)"
+        },
+        {
+          "along_river": 0.78,
+          "mode": "aligner",
+          "image_root": "alakanuk_site_b",
+          "label": "Field photos (8 frames)"
+        }
+      ]
     },
-    {
-      "river_id": "alakanuk",
-      "section_id": 3,
-      "label": "River sequence (60 frames)",
-      "image_root": "sequence_60",
-      "date_folders": []
-    },
-    {
-      "river_id": "huslia",
-      "section_id": 1,
-      "label": "Alakanuk site B (8 frames)",
-      "image_root": "alakanuk_site_b",
-      "date_folders": []
-    },
-    {
-      "river_id": "huslia",
-      "section_id": 2,
-      "label": "River sequence (60 frames)",
-      "image_root": "sequence_60",
-      "date_folders": []
-    },
-    {
-      "river_id": "huslia",
-      "section_id": 3,
-      "label": "Alakanuk site A (7 frames)",
-      "image_root": "alakanuk_site_a",
-      "date_folders": []
-    },
-    {
-      "river_id": "beaver",
-      "section_id": 1,
-      "label": "River sequence (60 frames)",
-      "image_root": "sequence_60",
-      "date_folders": []
-    },
-    {
-      "river_id": "beaver",
-      "section_id": 2,
-      "label": "Alakanuk site B (8 frames)",
-      "image_root": "alakanuk_site_b",
-      "date_folders": []
-    },
-    {
-      "river_id": "beaver",
-      "section_id": 3,
-      "label": "Alakanuk site A (7 frames)",
-      "image_root": "alakanuk_site_a",
-      "date_folders": []
+    "beaver": {
+      "sites": [
+        {
+          "along_river": 0.2,
+          "mode": "aligner",
+          "image_root": "sequence_60",
+          "label": "Field photos (60 frames)"
+        },
+        {
+          "along_river": 0.55,
+          "mode": "video",
+          "video_index": 1,
+          "label": "Preloaded river timelapse B"
+        },
+        {
+          "along_river": 0.88,
+          "mode": "aligner",
+          "image_root": "alakanuk_site_a",
+          "label": "Field photos (7 frames)"
+        }
+      ]
     }
-  ]
+  }
 }

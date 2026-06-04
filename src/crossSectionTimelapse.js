@@ -2,11 +2,17 @@ const SOURCES_URL = '/timelapse-sources.json';
 const TIMELAPSE_RESULT_MESSAGE = 'yukon-timelapse-result';
 
 let sourcesPromise = null;
-let cachedMappings = null;
+let sourcesConfig = null;
+/** @type {Map<string, Array<{ section: object, mapping: object }>>} */
+const timelapseSiteRegistry = new Map();
 /** @type {Map<string, object>} */
 const timelapseResultsByKey = new Map();
 let activeTimelapseContext = null;
 let onTimelapseSidebarRefresh = null;
+/** @type {Map<string, { url: string, title: string, source: string }>} */
+const analysisTimelapseByKey = new Map();
+/** @type {Map<string, { url: string, title: string, source: string, isBlob?: boolean }>} */
+const pendingTimelapseByKey = new Map();
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, (char) => ({
@@ -27,7 +33,8 @@ export function getTimelapseDataRoot() {
 }
 
 export async function initCrossSectionTimelapse() {
-  if (cachedMappings) return cachedMappings;
+  if (sourcesConfig) return sourcesConfig;
+  if (sourcesPromise) return sourcesPromise;
   if (!sourcesPromise) {
     sourcesPromise = fetch(SOURCES_URL)
       .then((response) => {
@@ -35,31 +42,154 @@ export async function initCrossSectionTimelapse() {
         return response.json();
       })
       .then((payload) => {
-        cachedMappings = Array.isArray(payload?.mappings) ? payload.mappings : [];
-        return cachedMappings;
+        sourcesConfig = payload || {};
+        return sourcesConfig;
       })
       .catch((error) => {
         console.warn('[timelapse]', error);
-        cachedMappings = [];
-        return cachedMappings;
+        sourcesConfig = {};
+        return sourcesConfig;
       });
   }
   return sourcesPromise;
 }
 
-export function findTimelapseMapping(riverId, section) {
-  if (!cachedMappings || !section) return null;
-  const riverKey = String(riverId || '').trim().toLowerCase();
-  const sectionId = Number(section.id);
-  if (!riverKey || !Number.isFinite(sectionId)) return null;
+function sectionAlongRiverCoord(section) {
+  const line = section?.line;
+  if (!line?.has_geometry) return null;
+  const sx = Number(line.start_x);
+  const sz = Number(line.start_y);
+  const ex = Number(line.end_x);
+  const ez = Number(line.end_y);
+  if (![sx, sz, ex, ez].every(Number.isFinite)) return null;
+  if (section.center && Number.isFinite(section.center.x) && Number.isFinite(section.center.y)) {
+    return { x: section.center.x, y: section.center.y };
+  }
+  return { x: (sx + ex) / 2, y: (sz + ez) / 2 };
+}
 
-  return (
-    cachedMappings.find(
-      (entry) =>
-        String(entry.river_id || '').toLowerCase() === riverKey
-        && Number(entry.section_id) === sectionId,
-    ) || null
+function sortSectionsAlongRiver(sections) {
+  const withCoord = sections
+    .map((section) => {
+      const c = sectionAlongRiverCoord(section);
+      if (!c) return null;
+      return { section, ...c };
+    })
+    .filter(Boolean);
+
+  if (withCoord.length === 0) return [];
+
+  const xs = withCoord.map((item) => item.x);
+  const ys = withCoord.map((item) => item.y);
+  const xSpan = Math.max(...xs) - Math.min(...xs);
+  const ySpan = Math.max(...ys) - Math.min(...ys);
+  const useY = ySpan >= xSpan;
+
+  withCoord.sort((a, b) => (useY ? a.y - b.y : a.x - b.x));
+  return withCoord;
+}
+
+function pickSectionAtRank(sortedSections, alongRiver) {
+  if (!sortedSections.length) return null;
+  const t = clamp(Number(alongRiver) || 0, 0, 1);
+  const index = Math.min(
+    sortedSections.length - 1,
+    Math.max(0, Math.round(t * (sortedSections.length - 1))),
   );
+  return sortedSections[index]?.section || null;
+}
+
+function mergeAnalysisTimelapseSites(riverKey, sections, sites) {
+  const allSections = Array.isArray(sections) ? sections : [];
+
+  const keyPrefix = `${riverKey}:`;
+  for (const [key, attachment] of analysisTimelapseByKey.entries()) {
+    if (!key.startsWith(keyPrefix)) continue;
+    const sectionId = Number(key.slice(keyPrefix.length));
+    if (!Number.isFinite(sectionId)) continue;
+
+    const section = allSections.find((item) => Number(item?.id) === sectionId);
+    if (!section?.line?.has_geometry) continue;
+
+    const mapping = {
+      mode: 'video',
+      label: attachment.title || 'Timelapse',
+      custom_url: attachment.url,
+      video_index: attachment.video_index,
+      section_id: section.id,
+      in_analysis: true,
+    };
+    const entry = { section, mapping };
+    const existingIndex = sites.findIndex((site) => Number(site.section?.id) === sectionId);
+    if (existingIndex >= 0) {
+      sites[existingIndex] = entry;
+    } else {
+      sites.push(entry);
+    }
+  }
+
+  return sites;
+}
+
+export function rebuildTimelapseSiteRegistry(riverId, sections) {
+  const riverKey = String(riverId || '').trim().toLowerCase();
+  timelapseSiteRegistry.delete(riverKey);
+
+  if (!riverKey) return [];
+
+  const riverConfig = sourcesConfig?.rivers?.[riverKey];
+  const siteDefs = Array.isArray(riverConfig?.sites) ? riverConfig.sites : [];
+  const sorted = sortSectionsAlongRiver(sections || []);
+  const sites = [];
+
+  for (const def of siteDefs) {
+    const section = pickSectionAtRank(sorted, def.along_river);
+    if (!section) continue;
+    const mapping = {
+      mode: def.mode === 'video' ? 'video' : 'aligner',
+      label: def.label || 'Timelapse site',
+      image_root: def.image_root || '',
+      date_folders: Array.isArray(def.date_folders) ? def.date_folders : [],
+      video_index: Number.isFinite(Number(def.video_index)) ? Number(def.video_index) : 0,
+      along_river: def.along_river,
+      section_id: section.id,
+    };
+    sites.push({ section, mapping });
+  }
+
+  mergeAnalysisTimelapseSites(riverKey, sections, sites);
+  timelapseSiteRegistry.set(riverKey, sites);
+  return sites;
+}
+
+export function getTimelapseSitesForRiver(riverId) {
+  const riverKey = String(riverId || '').trim().toLowerCase();
+  return timelapseSiteRegistry.get(riverKey) || [];
+}
+
+export function countTimelapseSitesForRiver(riverId) {
+  return getTimelapseSitesForRiver(riverId).length;
+}
+
+export function isAlignerTimelapseSite(mapping) {
+  return mapping?.mode === 'aligner' && Boolean(mapping?.image_root);
+}
+
+export function isVideoTimelapseSite(mapping) {
+  return mapping?.mode === 'video';
+}
+
+export function findTimelapseMapping(riverId, section) {
+  if (!section) return null;
+  const sites = getTimelapseSitesForRiver(riverId);
+  const sectionId = Number(section.id);
+  if (!Number.isFinite(sectionId)) return null;
+  const hit = sites.find((site) => Number(site.section?.id) === sectionId);
+  return hit?.mapping || null;
+}
+
+function clamp(v, min, max) {
+  return Math.min(max, Math.max(min, v));
 }
 
 export function resolveTimelapseFolder(mapping, dateFolderId = '') {
@@ -79,9 +209,124 @@ function buildTimelapseStreamUrl(filePath) {
   return `/aligner-api/stream?path=${encodeURIComponent(filePath)}`;
 }
 
-function getStoredTimelapseResult(riverId, section) {
+export function getStoredTimelapseResult(riverId, section) {
   if (!section) return null;
   return timelapseResultsByKey.get(timelapseResultKey(riverId, section.id)) || null;
+}
+
+export function getAnalysisTimelapseAttachment(riverId, section) {
+  if (!section) return null;
+  return analysisTimelapseByKey.get(timelapseResultKey(riverId, section.id)) || null;
+}
+
+function getPendingTimelapsePreview(riverId, section) {
+  if (!section) return null;
+  return pendingTimelapseByKey.get(timelapseResultKey(riverId, section.id)) || null;
+}
+
+function setPendingTimelapsePreview(riverId, section, preview) {
+  if (!section) return;
+  const key = timelapseResultKey(riverId, section.id);
+  const previous = pendingTimelapseByKey.get(key);
+  if (previous?.isBlob && previous.url) {
+    URL.revokeObjectURL(previous.url);
+  }
+  if (!preview?.url) {
+    pendingTimelapseByKey.delete(key);
+    return;
+  }
+  pendingTimelapseByKey.set(key, preview);
+}
+
+function resolveDemoVideoUrl(mapping, videoAssets = []) {
+  if (!mapping || !isVideoTimelapseSite(mapping) || mapping.in_analysis) return '';
+  if (mapping.custom_url) return mapping.custom_url;
+  const idx = Number(mapping.video_index) || 0;
+  const asset = Array.isArray(videoAssets) && videoAssets.length > 0
+    ? videoAssets[idx % videoAssets.length]
+    : null;
+  return asset?.url || '';
+}
+
+export function resolveTimelapsePlaybackUrl(mapping, videoAssets = []) {
+  if (!mapping) return '';
+  if (mapping.custom_url) return mapping.custom_url;
+  return resolveDemoVideoUrl(mapping, videoAssets);
+}
+
+export function canAddTimelapseToAnalysis(riverId, section) {
+  if (!section) return false;
+  const pending = getPendingTimelapsePreview(riverId, section);
+  if (pending?.url) return true;
+  const generated = getStoredTimelapseResult(riverId, section);
+  return Boolean(generated?.file);
+}
+
+export function attachTimelapseToAnalysis(riverId, section) {
+  if (!section) return false;
+  const key = timelapseResultKey(riverId, section.id);
+  const pending = getPendingTimelapsePreview(riverId, section);
+  const generated = getStoredTimelapseResult(riverId, section);
+
+  let attachment = null;
+  if (pending?.url) {
+    attachment = {
+      url: pending.url,
+      title: pending.title || 'Timelapse',
+      source: pending.source || 'file',
+    };
+  } else if (generated?.file) {
+    const fileName = String(generated.file).split('/').pop() || 'Generated timelapse';
+    attachment = {
+      url: buildTimelapseStreamUrl(generated.file),
+      title: fileName,
+      source: 'generated',
+    };
+  }
+
+  if (!attachment?.url) return false;
+
+  analysisTimelapseByKey.set(key, attachment);
+  if (pending?.isBlob && pending.url) {
+    URL.revokeObjectURL(pending.url);
+  }
+  pendingTimelapseByKey.delete(key);
+  return true;
+}
+
+function buildTimelapseVideoPreviewBlock(url, caption) {
+  if (!url) return '';
+  return `
+    <div class="cs-timelapse-preview-figure">
+      <video class="cs-timelapse-preview-video" controls playsinline loop muted preload="metadata" src="${escapeHtml(url)}"></video>
+      <p class="cs-timelapse-preview-caption">${escapeHtml(caption)}</p>
+    </div>
+  `;
+}
+
+function buildCrossSectionTimelapsePreviewHtml(riverId, section, mapping, videoAssets = []) {
+  const pending = getPendingTimelapsePreview(riverId, section);
+  if (pending?.url) {
+    return buildTimelapseVideoPreviewBlock(pending.url, pending.title || 'Preview — not yet added to analysis');
+  }
+
+  const attached = getAnalysisTimelapseAttachment(riverId, section);
+  if (attached?.url) {
+    return buildTimelapseVideoPreviewBlock(attached.url, `${attached.title} — in analysis`);
+  }
+
+  const demoUrl = resolveDemoVideoUrl(mapping, videoAssets);
+  if (demoUrl) {
+    const title = mapping?.label || 'Preloaded timelapse';
+    return buildTimelapseVideoPreviewBlock(demoUrl, `${title} — preloaded demo`);
+  }
+
+  const generated = getStoredTimelapseResult(riverId, section);
+  if (generated) {
+    return buildTimelapsePreviewInnerHtml(generated);
+  }
+
+  return '';
 }
 
 function buildTimelapsePreviewInnerHtml(result) {
@@ -136,8 +381,97 @@ function buildTimelapsePreviewSlotHtml(riverId, section) {
   `;
 }
 
+export function buildCrossSectionTimelapseMarkup(section, riverId, videoAssets = []) {
+  const mapping = findTimelapseMapping(riverId, section);
+  const sectionName = String(section?.transect || section?.mat_file || `XS-${section?.id || ''}`);
+  const dates = Array.isArray(mapping?.date_folders) ? mapping.date_folders : [];
+  const hasAlignerFolder = isAlignerTimelapseSite(mapping);
+  const inAnalysis = Boolean(getAnalysisTimelapseAttachment(riverId, section));
+  const canAdd = canAddTimelapseToAnalysis(riverId, section);
+  const previewHtml = buildCrossSectionTimelapsePreviewHtml(riverId, section, mapping, videoAssets);
+  const hasPreview = Boolean(previewHtml.trim());
+
+  const configWarning = hasAlignerFolder && !getTimelapseDataRoot()
+    ? '<p class="cs-timelapse-warning">Timelapse data path is not configured. Run <code>npm run setup</code> or set <code>VITE_DATA_ROOT</code>.</p>'
+    : '';
+
+  const dateField = hasAlignerFolder && dates.length > 1
+    ? `
+      <label class="cs-timelapse-label" for="csTimelapseDate">Capture date</label>
+      <select id="csTimelapseDate" class="cs-timelapse-select">
+        ${dates.map((d) => `<option value="${escapeHtml(d.id)}">${escapeHtml(d.label || d.id)}</option>`).join('')}
+      </select>
+    `
+    : hasAlignerFolder && dates.length === 1
+      ? `<p class="cs-timelapse-meta">Date: ${escapeHtml(dates[0].label || dates[0].id)}</p>`
+      : '';
+
+  const chip = inAnalysis ? 'in-analysis' : hasAlignerFolder ? 'aligner' : hasPreview ? 'timelapse' : 'timelapse';
+
+  return `
+    <section class="cs-card cs-timelapse-card" id="csTimelapseCard">
+      <div class="cs-card-head">
+        <div>
+          <h4 class="cs-card-title">Timelapse</h4>
+          <p class="cs-card-subtitle">${escapeHtml(sectionName)}${mapping?.label ? ` — ${escapeHtml(mapping.label)}` : ''}</p>
+        </div>
+        <span class="cs-chip${inAnalysis ? ' cs-chip-video' : ''}">${chip}</span>
+      </div>
+      <p class="cs-timelapse-meta">Generate a timelapse from field photos, load a pre-recorded video, then add it to this analysis to show a marker on the map.</p>
+      ${dateField}
+      ${configWarning}
+      <div class="cross-section-actions cs-timelapse-actions">
+        <button id="csGenerateTimelapseBtn" type="button" class="inline-btn cs-timelapse-btn">Generate timelapse</button>
+        <button id="csLoadTimelapseBtn" type="button" class="inline-btn cs-timelapse-btn-secondary">Load pre-recorded timelapse</button>
+        <input id="csLoadTimelapseFileInput" class="hidden-file-input" type="file" accept="video/*,.mp4,.mov,.m4v,.webm,.ogg" hidden />
+        <button id="csAddTimelapseToAnalysisBtn" type="button" class="inline-btn cs-timelapse-btn" ${canAdd ? '' : 'disabled'}>
+          ${inAnalysis ? 'Update analysis timelapse' : 'Add to analysis'}
+        </button>
+      </div>
+      <div id="csTimelapsePreview" class="cs-timelapse-preview-wrap${hasPreview ? '' : ' is-empty'}" ${hasPreview ? '' : 'hidden'}>
+        ${previewHtml}
+      </div>
+    </section>
+  `;
+}
+
+export function buildVideoTimelapseCardMarkup(mapping, section, videoAssets = []) {
+  if (!mapping || !isVideoTimelapseSite(mapping)) return '';
+
+  const sectionName = String(section?.transect || section?.mat_file || `XS-${section?.id || ''}`);
+  const idx = Number(mapping.video_index) || 0;
+  const asset = Array.isArray(videoAssets) && videoAssets.length > 0
+    ? videoAssets[idx % videoAssets.length]
+    : null;
+  const url = asset?.url || '';
+  const title = asset?.title || mapping.label || 'River timelapse';
+
+  const videoBlock = url
+    ? `
+      <div class="cs-timelapse-preview-figure">
+        <video class="cs-timelapse-preview-video" controls autoplay muted loop playsinline preload="metadata" src="${escapeHtml(url)}"></video>
+        <p class="cs-timelapse-preview-caption">${escapeHtml(title)} — preloaded demo video</p>
+      </div>
+    `
+    : '<p class="cs-empty">No preloaded video configured for this site.</p>';
+
+  return `
+    <section class="cs-card cs-timelapse-card cs-timelapse-card-video">
+      <div class="cs-card-head">
+        <div>
+          <h4 class="cs-card-title">Timelapse (preloaded)</h4>
+          <p class="cs-card-subtitle">${escapeHtml(sectionName)} — ${escapeHtml(mapping.label || title)}</p>
+        </div>
+        <span class="cs-chip cs-chip-video">demo-video</span>
+      </div>
+      <p class="cs-timelapse-meta">Bank-camera timelapse already compiled for this demo cross-section.</p>
+      ${videoBlock}
+    </section>
+  `;
+}
+
 export function buildTimelapseCardMarkup(mapping, section, riverId) {
-  if (!mapping) return '';
+  if (!mapping || !isAlignerTimelapseSite(mapping)) return '';
 
   const sectionName = String(section?.transect || section?.mat_file || `XS-${section?.id || ''}`);
   const dates = Array.isArray(mapping.date_folders) ? mapping.date_folders : [];
@@ -180,15 +514,24 @@ export function buildTimelapseCardMarkup(mapping, section, riverId) {
   `;
 }
 
-export function refreshTimelapsePreviewInCard(root, { riverId, section }) {
+export function refreshTimelapsePreviewInCard(root, { riverId, section, videoAssets = [] }) {
   if (!root || !section) return;
   const card = root.querySelector('#csTimelapseCard');
   if (!card) return;
 
-  const result = getStoredTimelapseResult(riverId, section);
+  const mapping = findTimelapseMapping(riverId, section);
+  const previewHtml = buildCrossSectionTimelapsePreviewHtml(riverId, section, mapping, videoAssets);
   let slot = card.querySelector('#csTimelapsePreview');
+  const addBtn = card.querySelector('#csAddTimelapseToAnalysisBtn');
+  const inAnalysis = Boolean(getAnalysisTimelapseAttachment(riverId, section));
+  const canAdd = canAddTimelapseToAnalysis(riverId, section);
 
-  if (!result) {
+  if (addBtn) {
+    addBtn.disabled = !canAdd;
+    addBtn.textContent = inAnalysis ? 'Update analysis timelapse' : 'Add to analysis';
+  }
+
+  if (!previewHtml.trim()) {
     if (slot) {
       slot.innerHTML = '';
       slot.hidden = true;
@@ -206,11 +549,12 @@ export function refreshTimelapsePreviewInCard(root, { riverId, section }) {
 
   slot.hidden = false;
   slot.classList.remove('is-empty');
-  slot.innerHTML = buildTimelapsePreviewInnerHtml(result);
+  slot.innerHTML = previewHtml;
 
+  const generated = getStoredTimelapseResult(riverId, section);
   const gifImg = slot.querySelector('.cs-timelapse-preview-gif');
-  if (gifImg && result.preview) {
-    fetch(`/aligner-api/preview_result?path=${encodeURIComponent(result.preview)}`)
+  if (gifImg && generated?.preview) {
+    fetch(`/aligner-api/preview_result?path=${encodeURIComponent(generated.preview)}`)
       .then((r) => r.json())
       .then((d) => {
         if (d?.b64) gifImg.src = `data:image/gif;base64,${d.b64}`;
@@ -242,8 +586,12 @@ function handleTimelapseResultMessage(event) {
     && timelapseResultKey(ctx.riverId, ctx.section?.id)
       === timelapseResultKey(data.river_id, data.section_id)
   ) {
-    refreshTimelapsePreviewInCard(ctx.root, { riverId: ctx.riverId, section: ctx.section });
-    onTimelapseSidebarRefresh?.('Timelapse ready — preview updated in sidebar.');
+    refreshTimelapsePreviewInCard(ctx.root, {
+      riverId: ctx.riverId,
+      section: ctx.section,
+      videoAssets: ctx.videoAssets || [],
+    });
+    onTimelapseSidebarRefresh?.('Timelapse ready — click Add to analysis to place a cyan map marker.');
   }
 }
 
@@ -251,9 +599,9 @@ function buildAlignerEmbedUrl(folder, sectionLabel, { riverId, sectionId } = {})
   const params = new URLSearchParams({
     embed: '1',
     autopreview: '1',
-    folder,
     section: sectionLabel,
   });
+  if (folder) params.set('folder', folder);
   if (riverId) params.set('river_id', String(riverId));
   if (sectionId !== undefined && sectionId !== null && sectionId !== '') {
     params.set('section_id', String(sectionId));
@@ -327,10 +675,14 @@ export function closeTimelapseModal() {
   }
 
   if (ctx) {
-    refreshTimelapsePreviewInCard(ctx.root, { riverId: ctx.riverId, section: ctx.section });
+    refreshTimelapsePreviewInCard(ctx.root, {
+      riverId: ctx.riverId,
+      section: ctx.section,
+      videoAssets: ctx.videoAssets || [],
+    });
     const result = getStoredTimelapseResult(ctx.riverId, ctx.section);
     if (result) {
-      onTimelapseSidebarRefresh?.('Timelapse preview shown below Generate timelapse.');
+      onTimelapseSidebarRefresh?.('Timelapse ready — click Add to analysis to place a cyan map marker.');
     }
   }
 
@@ -364,49 +716,115 @@ function notifyTimelapseError(message, onError) {
   window.alert(message);
 }
 
-export function bindTimelapseCard(root, { mapping, section, riverId, onError, onStatus }) {
-  if (!root || !mapping) return;
+function openGenerateTimelapseModal({ root, mapping, section, riverId, videoAssets = [], onError }) {
+  const dateSelect = root?.querySelector('#csTimelapseDate');
+  const dateFolderId = dateSelect ? dateSelect.value : '';
+  const folder = mapping && isAlignerTimelapseSite(mapping)
+    ? resolveTimelapseFolder(mapping, dateFolderId)
+    : '';
+
+  if (mapping && isAlignerTimelapseSite(mapping) && !folder) {
+    notifyTimelapseError(
+      'Timelapse data path is not configured. Restart npm run dev (default uses Yukon/data) or set VITE_DATA_ROOT in .env.',
+      onError,
+    );
+    return false;
+  }
+
+  const sectionLabel = [
+    String(riverId || '').toUpperCase(),
+    String(section?.transect || section?.mat_file || `XS-${section?.id || ''}`),
+    mapping?.label,
+  ].filter(Boolean).join(' · ');
+
+  activeTimelapseContext = { root, riverId, section, videoAssets };
+
+  const opened = openTimelapseModal({
+    folder: folder || undefined,
+    sectionLabel,
+    riverId,
+    sectionId: section?.id,
+  });
+  if (!opened) {
+    activeTimelapseContext = null;
+    notifyTimelapseError('Timelapse workspace could not open. Reload the page and try again.', onError);
+    return false;
+  }
+  return true;
+}
+
+export function bindTimelapseCard(root, { mapping, section, riverId, videoAssets, onError, onStatus, onMarkersChange }) {
+  if (!root || !section) return;
+  bindCrossSectionTimelapseCard(root, { mapping, section, riverId, videoAssets, onError, onStatus, onMarkersChange });
+}
+
+export function bindCrossSectionTimelapseCard(root, {
+  mapping,
+  section,
+  riverId,
+  videoAssets = [],
+  onError,
+  onStatus,
+  onMarkersChange,
+}) {
+  if (!root || !section) return;
   ensureModalEvents();
   onTimelapseSidebarRefresh = onStatus || null;
 
-  const button = root.querySelector('#csGenerateTimelapseBtn');
-  const dateSelect = root.querySelector('#csTimelapseDate');
-  if (!button) return;
+  const generateBtn = root.querySelector('#csGenerateTimelapseBtn');
+  const loadBtn = root.querySelector('#csLoadTimelapseBtn');
+  const fileInput = root.querySelector('#csLoadTimelapseFileInput');
+  const addBtn = root.querySelector('#csAddTimelapseToAnalysisBtn');
+  if (!generateBtn) return;
 
-  refreshTimelapsePreviewInCard(root, { riverId, section });
+  refreshTimelapsePreviewInCard(root, { riverId, section, videoAssets });
 
-  button.addEventListener('click', (event) => {
+  generateBtn.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    openGenerateTimelapseModal({ root, mapping, section, riverId, videoAssets, onError });
+  });
+
+  loadBtn?.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    fileInput?.click();
+  });
+
+  fileInput?.addEventListener('change', () => {
+    const file = fileInput.files?.[0];
+    fileInput.value = '';
+    if (!file) return;
+
+    const objectUrl = URL.createObjectURL(file);
+    setPendingTimelapsePreview(riverId, section, {
+      url: objectUrl,
+      title: file.name || 'Pre-recorded timelapse',
+      source: 'file',
+      isBlob: true,
+    });
+    refreshTimelapsePreviewInCard(root, { riverId, section, videoAssets });
+    onStatus?.('Pre-recorded timelapse loaded — click Add to analysis to place a map marker.');
+  });
+
+  addBtn?.addEventListener('click', (event) => {
     event.preventDefault();
     event.stopPropagation();
 
-    const dateFolderId = dateSelect ? dateSelect.value : '';
-    const folder = resolveTimelapseFolder(mapping, dateFolderId);
-    if (!folder) {
-      notifyTimelapseError(
-        'Timelapse data path is not configured. Restart npm run dev (default uses Yukon/data) or set VITE_DATA_ROOT in .env.',
-        onError,
-      );
+    if (!canAddTimelapseToAnalysis(riverId, section)) {
+      notifyTimelapseError('Load or generate a timelapse first, then add it to the analysis.', onError);
       return;
     }
 
-    const sectionLabel = [
-      String(riverId || '').toUpperCase(),
-      String(section?.transect || section?.mat_file || `XS-${section?.id || ''}`),
-      mapping.label,
-    ].filter(Boolean).join(' · ');
-
-    activeTimelapseContext = { root, riverId, section };
-
-    const opened = openTimelapseModal({
-      folder,
-      sectionLabel,
-      riverId,
-      sectionId: section?.id,
-    });
-    if (!opened) {
-      activeTimelapseContext = null;
-      notifyTimelapseError('Timelapse workspace could not open. Reload the page and try again.', onError);
+    const attached = attachTimelapseToAnalysis(riverId, section);
+    if (!attached) {
+      notifyTimelapseError('Could not add timelapse to this analysis.', onError);
+      return;
     }
+
+    onMarkersChange?.();
+    refreshTimelapsePreviewInCard(root, { riverId, section, videoAssets });
+    onStatus?.('Timelapse added to analysis — cyan marker shown on the map.');
   });
 }
 

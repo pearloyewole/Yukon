@@ -292,14 +292,12 @@ input[type='checkbox'] {
   gap: 10px;
 }
 
-.align-mode-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
+.alignment-mode-select {
+  cursor: pointer;
+  font-family: 'IBM Plex Sans', 'Segoe UI', system-ui, sans-serif;
 }
 
 .workspace-tab,
-.align-mode-chip,
 button,
 .download-link {
   border: 1px solid var(--line-strong);
@@ -318,31 +316,20 @@ button,
   font-size: 0.86rem;
 }
 
-.align-mode-chip {
-  width: auto;
-  margin: 0;
-  font-weight: 600;
-  padding: 10px 8px;
-  font-size: 0.82rem;
-  text-align: center;
-}
-
 button {
   padding: 9px 12px;
   font-size: 0.88rem;
 }
 
 .workspace-tab:hover,
-.align-mode-chip:hover,
-button:hover,
+button:hover:not(.btn-generate-timelapse),
 .download-link:hover {
   border-color: var(--line-active);
   background: linear-gradient(180deg, var(--panel-hover-top), var(--panel-hover-bottom));
   color: #effbff;
 }
 
-.workspace-tab.is-active,
-.align-mode-chip.is-active {
+.workspace-tab.is-active {
   border-color: var(--line-active);
   background: linear-gradient(180deg, var(--panel-hover-top), var(--panel-hover-bottom));
   color: #effbff;
@@ -354,6 +341,12 @@ button:disabled {
   cursor: not-allowed;
 }
 
+.section-generate-action {
+  margin-top: 6px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+
 .btn-primary {
   width: 100%;
   margin-top: 4px;
@@ -362,6 +355,57 @@ button:disabled {
   padding: 12px 14px;
   border-color: rgba(118, 196, 255, 0.45);
   color: var(--text-bright);
+}
+
+.btn-generate-timelapse {
+  width: 100%;
+  margin-top: 10px;
+  padding: 14px 18px;
+  border: 1px solid rgba(125, 211, 252, 0.58);
+  border-radius: var(--radius);
+  background: linear-gradient(
+    135deg,
+    rgba(125, 211, 252, 0.42) 0%,
+    rgba(56, 189, 248, 0.55) 38%,
+    rgba(14, 116, 200, 0.62) 68%,
+    rgba(56, 189, 248, 0.38) 100%
+  );
+  color: #f4fcff;
+  font-weight: 700;
+  font-size: 0.94rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  box-shadow:
+    0 6px 22px rgba(56, 189, 248, 0.28),
+    inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    inset 0 -1px 0 rgba(4, 30, 58, 0.35);
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease,
+    filter 0.15s ease,
+    transform 0.12s ease;
+}
+
+.btn-generate-timelapse-label {
+  display: block;
+}
+
+.btn-generate-timelapse:hover:not(:disabled) {
+  border-color: rgba(186, 230, 255, 0.9);
+  filter: brightness(1.1);
+  box-shadow:
+    0 8px 28px rgba(56, 189, 248, 0.38),
+    inset 0 1px 0 rgba(255, 255, 255, 0.22);
+  transform: translateY(-1px);
+  color: #ffffff;
+}
+
+.btn-generate-timelapse:active:not(:disabled) {
+  transform: translateY(0);
+  filter: brightness(0.98);
+  box-shadow:
+    0 3px 12px rgba(56, 189, 248, 0.22),
+    inset 0 1px 0 rgba(255, 255, 255, 0.12);
 }
 
 .btn-secondary,

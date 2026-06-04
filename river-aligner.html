@@ -42,12 +42,13 @@
 
         <section class="section">
           <h3 class="section-title">Alignment mode</h3>
-          <div class="align-mode-grid" role="group" aria-label="Alignment mode">
-            <button type="button" class="align-mode-chip is-active" data-mode="general" onclick="selectMode('general')">General</button>
-            <button type="button" class="align-mode-chip" data-mode="select" onclick="selectMode('select')">Select</button>
-            <button type="button" class="align-mode-chip" data-mode="custom" onclick="selectMode('custom')">Custom</button>
-            <button type="button" class="align-mode-chip" data-mode="timefilter" onclick="selectMode('timefilter')">Daily time</button>
-          </div>
+          <label class="field-label" for="alignmentModeSelect">Mode</label>
+          <select id="alignmentModeSelect" class="alignment-mode-select" aria-describedby="modeDesc" onchange="selectMode(this.value)">
+            <option value="general">General — full frame</option>
+            <option value="select">Select — ROI crop</option>
+            <option value="custom">Custom — feature ROIs</option>
+            <option value="timefilter">Daily time — slot filter</option>
+          </select>
           <p class="mode-desc" id="modeDesc"></p>
         </section>
 
@@ -88,8 +89,12 @@
           <p class="section-hint">MP4 is required for Change Detector and saved moments.</p>
         </section>
 
-        <section class="section">
-          <button type="button" id="runBtn" class="btn-primary" onclick="runJob()">Generate timelapse</button>
+        <section class="section section-generate-action">
+          <h3 class="section-title">Action</h3>
+          <p class="section-hint">Run alignment on the image folder using the settings above.</p>
+          <button type="button" id="runBtn" class="btn-generate-timelapse" onclick="runJob()">
+            <span class="btn-generate-timelapse-label">Generate timelapse</span>
+          </button>
           <div id="progressWrap" class="progress-wrap" hidden>
             <div class="prog-bar-bg"><div class="prog-bar-fill" id="progFill"></div></div>
             <div class="prog-msg" id="progMsg">Starting...</div>
@@ -390,10 +395,11 @@ function removeSlot(i) {
 
 function selectMode(m) {
   currentMode = m;
-  document.querySelectorAll('.align-mode-chip').forEach((t) => {
-    t.classList.toggle('is-active', t.dataset.mode === m);
-  });
-  document.getElementById('modeDesc').textContent = MODE_DESCS[m];
+  const modeSelect = document.getElementById('alignmentModeSelect');
+  if (modeSelect && modeSelect.value !== m) {
+    modeSelect.value = m;
+  }
+  document.getElementById('modeDesc').textContent = MODE_DESCS[m] || '';
   const needRoi = (m === 'select' || m === 'custom' || m === 'timefilter');
   const showTimeCfg = (m === 'timefilter');
   document.getElementById('timefilterPanel').classList.toggle('hidden', !showTimeCfg);
