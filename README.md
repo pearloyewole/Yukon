@@ -1,6 +1,8 @@
 # Yukon
 
-3D river analysis viewer (Huslia, Alakanuk, Beaver) with an integrated **River Images Aligner** for cross-section timelapses.
+# preview link: https://yukon-ten.vercel.app/ 
+
+**Note: Uploads and image alignment will not work on the online preview. If you would like to run this locally to access the image alignment features please follow the steps below:**
 
 ## Quick start
 
@@ -54,3 +56,4 @@ Default image root: `data/timelapse` (override with `VITE_DATA_ROOT` in `.env` i
 - **Timelapse / preview fails** — Ensure `npm run dev` is running (aligner on port 3000). Only one dev server at a time.  
 - **Missing images after clone** — Run `git lfs pull`.  
 - **Refresh demo data** — `npm run data:sync` from workspace `Yukon/data` if you still have the full dataset locally.
+
